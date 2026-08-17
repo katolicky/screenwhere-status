@@ -1,0 +1,125 @@
+name: status
+
+# The public status page (w-a06b23 · status/README.md; moved out of the private screenwhere
+# monorepo as w-0ff9be — its docs/STATUS-PAGE-PLAN.md holds the design history).
+#
+# This runs HERE, on GitHub's fleet, and that is the whole design. Caddy, the relay, MediaMTX,
+# coturn and the MCP server are five containers on one Hetzner VPS; the failure worth reporting
+# takes all five at once, and a prober sitting beside them would go with it. Route D puts both
+# the probe and the page somewhere the main VPS cannot reach.
+#
+# ⚠️ Two things about GitHub's cron, so nobody later reads a gap in the bar as an outage:
+#   • it is best-effort — under load a */5 schedule can slip by many minutes;
+#   • it is DISABLED automatically after 60 days without repository activity.
+# Both are why the page draws missing data grey and labels grey "unknown, not fine", rather
+# than letting silence render as health.
+
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths: ["status/**", ".github/workflows/status.yml"]
+
+# One tick at a time. The history branch is force-pushed, so two overlapping runs would race
+# and the loser's readings would vanish without a trace.
+concurrency:
+  group: status
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # 🚨 Without this the run reaches "Publish history" and dies on
+    # `remote: Write access to repository not granted` — a 403, exit 128. `GITHUB_TOKEN` is
+    # READ-ONLY by default, and this job force-pushes the `status-data` branch with it. Declared
+    # at job level and nowhere wider: `contents: write` is the only scope this needs, and the
+    # token still cannot touch actions, packages, or anything else.
+    permissions:
+      contents: write
+    # 🚨 The Cloudflare secrets are lifted to job-level `env` for ONE reason: a step's `if:` may
+    # not read the `secrets` context. GitHub allows `secrets` in `env`, `with` and at job level
+    # and nowhere else, and an `if: ${{ secrets.X != '' }}` is not a false condition — it is an
+    # invalid workflow FILE. The whole run fails at validation in 0 s, before a single step, and
+    # the Actions list shows a red mark with no log to open. It shipped that way and every run
+    # from the first commit of this page onwards failed, silently, because the design said the
+    # publish step would be "skipped" and nobody opened the tab to check which. `env` IS allowed
+    # in `if:`, so the same intent survives the move.
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # The durable history lives on the orphan branch `status-data`, never on main. At a
+      # five-minute cadence a commit per run is 288 commits a day — the branch therefore holds
+      # exactly ONE commit, amended by being rebuilt from scratch and force-pushed below.
+      - name: Fetch history
+        run: |
+          git fetch origin status-data --depth=1 2>/dev/null || echo "no history branch yet — starting empty"
+          git show FETCH_HEAD:history.json > status/history.json 2>/dev/null || echo "starting empty"
+
+      - name: Probe
+        env:
+          # Optional. Without it the site-agent row reports "no data" instead of disappearing.
+          # It must be a PAT with no more reach than reading /app/health.
+          SW_STATUS_PAT: ${{ secrets.SW_STATUS_PAT }}
+          # Outage alerting (w-bc5fa5). Optional in exactly the same way: absent, run.mjs still
+          # decides and records the transition and prints a ::notice:: saying nothing was sent.
+          #
+          # 🚨 THE GATE IS IN NODE, NOT IN AN `if:` HERE, and that is not a style choice — a
+          # step's `if:` may not read the `secrets` context, and writing one does not produce a
+          # false condition but an invalid workflow FILE that fails in 0 s with no log. This
+          # workflow shipped that fault once already (w-f862c0); the safest place for a
+          # "configured?" test is inside a program that can print why.
+          SW_STATUS_DISCORD_WEBHOOK: ${{ secrets.SW_STATUS_DISCORD_WEBHOOK }}
+          # Optional ping to ride above the card — `@here`, `<@&roleid>` or a bare user id.
+          # An unparseable value adds nothing rather than pasting noise into the channel.
+          SW_STATUS_DISCORD_MENTION: ${{ secrets.SW_STATUS_DISCORD_MENTION }}
+        run: node status/run.mjs
+
+      - name: Publish history
+        run: |
+          tmp=$(mktemp -d)
+          cp status/history.json "$tmp/history.json"
+          cd "$tmp"
+          git init -q -b status-data
+          git config user.name  "screenwhere-status"
+          git config user.email "status@screenwhere.com"
+          git add history.json
+          git commit -q -m "status history $(date -u +%FT%TZ)"
+          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" status-data
+
+      # The page itself. Cloudflare Pages, because GitHub Pages will not serve a private repo
+      # without a paid plan — and because Cloudflare already holds the DNS for the hostname.
+      # Absent the secrets this step is skipped and the run still records history, so the prober
+      # can be proven before the hosting exists.
+      #
+      # ⚠️ BOTH secrets are required, and the pair is the point. Setting up hosting is three
+      # separate actions in two different web UIs, so "one of them done" is not an edge case — it
+      # is the most likely state anybody is ever in. Testing only the token meant a half-configured
+      # repo RAN this step and died inside wrangler, while the "here is what is missing" notice
+      # below stayed quiet because its condition was also written against the token alone.
+      #
+      # 🚨 The two conditions must stay exact complements. If they ever both go false, publication
+      # does not happen AND nothing says so — the failure this whole page was built to refuse,
+      # reproduced in its own delivery pipeline. `status/test-status.mjs` asserts the pairing.
+      - name: Publish page
+        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
+        run: npx --yes wrangler@3 pages deploy status/public --project-name=screenwhere-status --branch=main --commit-dirty=true
+
+      - name: Say what was skipped
+        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
+        # `if` rather than `[ … ] && …`: the step runs under `bash -e`, and whether an AND-OR list
+        # whose left side is false trips it is a rule nobody should have to recall while reading a
+        # notice-printing step. Verified against `bash -e` locally for all three cases.
+        run: |
+          missing=""
+          if [ -z "$CLOUDFLARE_API_TOKEN" ];  then missing="$missing CLOUDFLARE_API_TOKEN";  fi
+          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then missing="$missing CLOUDFLARE_ACCOUNT_ID"; fi
+          echo "::notice::History updated; page NOT published — missing secret(s):$missing. Setup: status/README.md § Hosting."

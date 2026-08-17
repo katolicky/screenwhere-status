@@ -1,0 +1,7 @@
+# The dispatch Worker (see worker.js). Cron triggers are included in the Workers free plan.
+name = "screenwhere-status-cron"
+main = "worker.js"
+compatibility_date = "2026-08-17"
+
+[triggers]
+crons = ["*/5 * * * *"]

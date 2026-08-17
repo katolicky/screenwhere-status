@@ -1,0 +1,31 @@
+{
+  "//": "Dev-only type-checking, same shape as the screenwhere monorepo this code moved out of",
+  "//2": "(w-0ff9be, 2026-08-17). NO build, NO emit — the files stay plain JS that Node and the",
+  "//3": "browser run directly. checkJs is OFF globally; a file opts in with `// @ts-check`.",
+  "compilerOptions": {
+    "noEmit": true,
+    "allowJs": true,
+    "checkJs": false,
+    "module": "ESNext",
+    "moduleResolution": "Bundler",
+    "target": "ES2022",
+    "lib": [
+      "ES2022",
+      "DOM",
+      "DOM.Iterable"
+    ],
+    "strict": true,
+    "noImplicitAny": false,
+    "useUnknownInCatchVariables": false,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": [
+      "node"
+    ]
+  },
+  "include": [
+    "status/**/*.mjs",
+    "status/**/*.js",
+    "shared/**/*.mjs"
+  ]
+}

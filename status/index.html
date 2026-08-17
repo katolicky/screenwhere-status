@@ -1,0 +1,467 @@
+<!DOCTYPE html>
+<html lang="cs" data-theme="">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Screenwhere — stav služby</title>
+<meta name="description" content="Dostupnost Screenwhere: stav služby, uptime za 90 dní a historie incidentů." />
+<meta name="robots" content="index,follow" />
+<!--
+  status.screenwhere.com — the public status page (w-a06b23 · docs/STATUS-PAGE-PLAN.md).
+
+  Static. It is published from GitHub Actions and served off a host that is not ours, because
+  the failure worth reporting takes the whole VPS with it — a page served by the thing it
+  reports on is only ever honest about the failures that do not matter.
+
+  ⚠️ THE ONE THING THAT MUST NOT BE SIMPLIFIED AWAY: this page decides for itself whether its
+  data is still worth believing. A static file pushed by a cron keeps serving its last answer
+  forever, so a prober that dies leaves a cheerful green page over a dead product. Everything
+  below the `stale` check exists for that: past staleAfterMin the banner stops claiming a state,
+  the badges fall back to "no data", and today's bar goes grey. Grey is labelled "unknown, not
+  fine" for the same reason.
+
+  Themed the way `docs/site/docs.css` is, and for the same reason: this is a public page that
+  people open from a search result on whatever machine they happen to be at, so it has to arrive
+  looking like the rest of the desktop rather than punching a dark hole in a light one. The
+  `data-theme` attribute above is deliberately EMPTY — that is the "follow the OS" state, and the
+  two explicit values `light` / `dark` are what the button in the nav writes.
+-->
+<!-- Before the stylesheet, and a classic script rather than the module below, because both of
+     those are what keeps it ahead of the first paint. Read the stored choice late and the page
+     renders once in the OS theme and then flips, which reads as a glitch on every single load. -->
+<script>
+  try { var t = localStorage.getItem('sw-status-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+</script>
+<style>
+  /* ===== tokens — the base set and LIGHT semantics; taken from docs/site/docs.css so the two
+     public pages are one product. Everything below this block reads a variable: a literal colour
+     in a rule is a colour that only works in one theme, which is the fault this page shipped
+     with. The `--*-wash` / `--*-line` / `--*-chip` triples exist for exactly that — the tinted
+     banners and pills used to be hard-coded rgba(), and the two built on white alpha
+     (`.s-none`, `.b-stale .ico`) disappeared completely on a white card. ===== */
+  :root{
+    --color-fg:#14181a; --color-fg-muted:#2c3437; --color-fg-subtle:#5b6469;
+    --color-bg:#fafbfa; --color-bg-soft:#f3f6f3; --color-border:#ebeeef; --color-border-strong:#d5dadc;
+    --color-accent-fg:#0d6614; --color-accent-bright:#2dd140; --color-accent-bg:#e8f6ea;
+    --color-surface:#fff; --color-surface-alt:#eef1ee;
+    --ok:#0f7a17; --ok-dim:#149a1f; --warn:#8a5c05; --down:#c22a2a; --nodata:#dde2de;
+    --ok-wash:rgba(15,122,23,.07);   --ok-line:rgba(15,122,23,.3);    --ok-ico:rgba(15,122,23,.13);
+    --warn-wash:rgba(138,92,5,.07);  --warn-line:rgba(138,92,5,.32);  --warn-ico:rgba(138,92,5,.13);
+    --down-wash:rgba(194,42,42,.06); --down-line:rgba(194,42,42,.3);  --down-ico:rgba(194,42,42,.12);
+    --ok-chip:rgba(15,122,23,.1); --warn-chip:rgba(138,92,5,.11); --down-chip:rgba(194,42,42,.09);
+    --none-chip:rgba(10,15,10,.05); --stale-ico:rgba(10,15,10,.06);
+    --ok-ring:rgba(15,122,23,.45); --ok-ring-0:rgba(15,122,23,0);
+    --radius:18px; --radius-pill:999px;
+    --font-ui:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
+    --dur:.25s; --ease:cubic-bezier(.2,.7,.2,1);
+    color-scheme:light;
+  }
+  /* ===== DARK — once explicitly, for the button, and once behind the media query, for the
+     machine. Both lists, not one aliased to the other: a `@media` block cannot be re-entered by
+     an attribute, so an explicit `dark` on a light desktop has nowhere else to read this from.
+     ⚠️ They must be kept in step; the suite compares them property for property. ===== */
+  html[data-theme="dark"]{
+    --color-fg:#eef2f0; --color-fg-muted:#c0c8c4; --color-fg-subtle:#8a938e;
+    --color-bg:#0a0e0c; --color-bg-soft:#101513; --color-border:#252d28; --color-border-strong:#36403b;
+    --color-accent-fg:#41dd51; --color-accent-bright:#2dd140; --color-accent-bg:#13251b;
+    --color-surface:#161c19; --color-surface-alt:#1f2723;
+    --ok:#2dd140; --ok-dim:#1c7d2a; --warn:#e6b450; --down:#ef6a6a; --nodata:#2b332e;
+    --ok-wash:rgba(45,209,64,.09);    --ok-line:rgba(45,209,64,.34);    --ok-ico:rgba(45,209,64,.18);
+    --warn-wash:rgba(230,180,80,.09); --warn-line:rgba(230,180,80,.36); --warn-ico:rgba(230,180,80,.18);
+    --down-wash:rgba(239,106,106,.1); --down-line:rgba(239,106,106,.4); --down-ico:rgba(239,106,106,.18);
+    --ok-chip:rgba(45,209,64,.13); --warn-chip:rgba(230,180,80,.14); --down-chip:rgba(239,106,106,.14);
+    --none-chip:rgba(255,255,255,.05); --stale-ico:rgba(255,255,255,.07);
+    --ok-ring:rgba(45,209,64,.6); --ok-ring-0:rgba(45,209,64,0);
+    color-scheme:dark;
+  }
+  @media (prefers-color-scheme:dark){ html:not([data-theme="light"]):not([data-theme="dark"]){
+    --color-fg:#eef2f0; --color-fg-muted:#c0c8c4; --color-fg-subtle:#8a938e;
+    --color-bg:#0a0e0c; --color-bg-soft:#101513; --color-border:#252d28; --color-border-strong:#36403b;
+    --color-accent-fg:#41dd51; --color-accent-bright:#2dd140; --color-accent-bg:#13251b;
+    --color-surface:#161c19; --color-surface-alt:#1f2723;
+    --ok:#2dd140; --ok-dim:#1c7d2a; --warn:#e6b450; --down:#ef6a6a; --nodata:#2b332e;
+    --ok-wash:rgba(45,209,64,.09);    --ok-line:rgba(45,209,64,.34);    --ok-ico:rgba(45,209,64,.18);
+    --warn-wash:rgba(230,180,80,.09); --warn-line:rgba(230,180,80,.36); --warn-ico:rgba(230,180,80,.18);
+    --down-wash:rgba(239,106,106,.1); --down-line:rgba(239,106,106,.4); --down-ico:rgba(239,106,106,.18);
+    --ok-chip:rgba(45,209,64,.13); --warn-chip:rgba(230,180,80,.14); --down-chip:rgba(239,106,106,.14);
+    --none-chip:rgba(255,255,255,.05); --stale-ico:rgba(255,255,255,.07);
+    --ok-ring:rgba(45,209,64,.6); --ok-ring-0:rgba(45,209,64,0);
+    color-scheme:dark;
+  }}
+  *{ box-sizing:border-box; -webkit-tap-highlight-color:transparent; }
+  body{ margin:0; background:var(--color-bg); color:var(--color-fg); font-family:var(--font-ui);
+        font-size:16px; -webkit-font-smoothing:antialiased; line-height:1.55;
+        transition:background var(--dur) var(--ease), color var(--dur) var(--ease); }
+  .num{ font-variant-numeric:tabular-nums lining-nums; }
+  button{ font:inherit; color:inherit; }
+
+  /* Sticky like the docs site's nav: on a long page the language switch and the way back to the
+     app must not require scrolling to the top to find. */
+  .nav{ position:sticky; top:0; z-index:40; display:flex; align-items:center; gap:14px;
+        padding:13px clamp(16px,4vw,34px);
+        border-bottom:1px solid var(--color-border); background:var(--color-bg-soft); }
+  .brand{ display:flex; align-items:center; gap:10px; font-weight:700; letter-spacing:-.02em; }
+  .brand .logo{ width:26px; height:26px; display:grid; place-items:center; border-radius:8px;
+    background:linear-gradient(135deg,#19a826,#2dd140); color:#fff; }
+  .brand .logo svg{ width:16px; height:16px; }
+  .brand .accent{ color:var(--color-accent-fg); }
+  .brand .sep{ color:var(--color-border-strong); font-weight:400; }
+  .brand .what{ color:var(--color-fg-muted); font-weight:600; }
+  .grow{ flex:1 1 auto; }
+  .navlink{ color:var(--color-fg-subtle); font-size:.88rem; text-decoration:none; font-weight:500; }
+  .navlink:hover{ color:var(--color-fg); }
+  .lang,.theme{ background:transparent; border:1px solid var(--color-border-strong); color:var(--color-fg-subtle);
+         border-radius:var(--radius-pill); font-size:.82rem; font-weight:600; cursor:pointer;
+         transition:all var(--dur) var(--ease); }
+  .lang{ padding:4px 12px; }
+  .lang:hover,.theme:hover{ color:var(--color-fg); border-color:var(--color-fg-subtle); }
+  /* Round rather than a second pill: two pills side by side read as a pair of choices about the
+     same thing, and language and theme are not that. */
+  .theme{ width:28px; height:28px; display:grid; place-items:center; padding:0; }
+  .theme svg{ width:15px; height:15px; }
+  /* Which glyph shows is decided by the theme in force, and the media query has to answer for
+     the unset case as well — otherwise a dark desktop sees the "switch to dark" sun. */
+  .theme .moon{ display:none; }
+  html[data-theme="dark"] .theme .sun{ display:none; }
+  html[data-theme="dark"] .theme .moon{ display:block; }
+  @media (prefers-color-scheme:dark){
+    html:not([data-theme="light"]):not([data-theme="dark"]) .theme .sun{ display:none; }
+    html:not([data-theme="light"]):not([data-theme="dark"]) .theme .moon{ display:block; }
+  }
+
+  .page{ max-width:960px; margin:0 auto; padding:30px clamp(16px,4vw,34px) 46px; }
+
+  .banner{ display:flex; align-items:flex-start; gap:15px; padding:19px 21px; border-radius:var(--radius);
+           border:1px solid; margin-bottom:9px; transition:all var(--dur) var(--ease); }
+  .banner .ico{ width:30px; height:30px; flex:none; border-radius:var(--radius-pill); display:grid;
+                place-items:center; margin-top:1px; }
+  .banner .ico svg{ width:17px; height:17px; }
+  .banner h1{ margin:0; font-size:1.22rem; letter-spacing:-.015em; line-height:1.3; }
+  .banner p{ margin:4px 0 0; font-size:.92rem; color:var(--color-fg-muted); }
+  .b-ok  { background:var(--ok-wash);   border-color:var(--ok-line); }
+  .b-ok   .ico{ background:var(--ok-ico);   color:var(--ok); }
+  .b-warn{ background:var(--warn-wash); border-color:var(--warn-line); }
+  .b-warn .ico{ background:var(--warn-ico); color:var(--warn); }
+  .b-down{ background:var(--down-wash); border-color:var(--down-line); }
+  .b-down .ico{ background:var(--down-ico); color:var(--down); }
+  .b-stale{ background:var(--color-surface-alt); border-color:var(--color-border-strong); border-style:dashed; }
+  .b-stale .ico{ background:var(--stale-ico); color:var(--color-fg-subtle); }
+
+  .checked{ display:flex; align-items:center; gap:8px; font-size:.84rem; color:var(--color-fg-subtle);
+            padding:0 3px; margin-bottom:26px; flex-wrap:wrap; }
+  .pulse{ width:7px; height:7px; border-radius:50%; background:var(--ok); flex:none;
+          box-shadow:0 0 0 0 var(--ok-ring); animation:pulse 2.6s infinite; }
+  .pulse.off{ background:var(--color-fg-subtle); animation:none; box-shadow:none; }
+  /* The ring fades by growing, so its end state is the SAME colour at zero alpha — hence the
+     second token. Ending on `transparent` would interpolate towards transparent BLACK, which is
+     a grey smear on the way out and is visible on the light theme. */
+  @keyframes pulse{ 70%{ box-shadow:0 0 0 7px var(--ok-ring-0);} 100%{ box-shadow:0 0 0 0 var(--ok-ring-0);} }
+  .dotsep{ opacity:.45; }
+
+  .sect{ display:flex; align-items:baseline; gap:10px; margin:0 0 13px; }
+  .sect h2{ margin:0; font-size:1rem; letter-spacing:-.01em; }
+  .sect .hint{ font-size:.82rem; color:var(--color-fg-subtle); }
+
+  .card{ background:var(--color-surface); border:1px solid var(--color-border);
+         border-radius:var(--radius); overflow:hidden; }
+  .row{ padding:16px 20px 14px; border-top:1px solid var(--color-border); }
+  .row:first-child{ border-top:0; }
+  .rowhd{ display:flex; align-items:center; gap:11px; margin-bottom:11px; }
+  .rowhd .nm{ font-weight:600; font-size:.95rem; }
+  .rowhd .ep{ font-size:.78rem; color:var(--color-fg-subtle); font-family:ui-monospace,SFMono-Regular,Menlo,monospace; }
+  .state{ display:inline-flex; align-items:center; gap:6px; font-size:.82rem; font-weight:600;
+          padding:3px 10px; border-radius:var(--radius-pill); white-space:nowrap; }
+  .s-ok  { background:var(--ok-chip);   color:var(--ok); }
+  .s-warn{ background:var(--warn-chip); color:var(--warn); }
+  .s-down{ background:var(--down-chip); color:var(--down); }
+  .s-none{ background:var(--none-chip); color:var(--color-fg-subtle); }
+  .state .d{ width:6px; height:6px; border-radius:50%; background:currentColor; }
+  .pct{ font-size:.84rem; color:var(--color-fg-muted); font-weight:600; white-space:nowrap; }
+
+  .bars{ display:flex; gap:2px; align-items:stretch; height:32px; }
+  .bars i{ flex:1 1 0; min-width:2px; border-radius:2px; background:var(--ok-dim);
+           transition:transform .12s var(--ease), filter .12s var(--ease); }
+  .bars i:hover{ transform:scaleY(1.14); filter:brightness(1.45); }
+  .bars i.ok{ background:var(--ok-dim); }
+  .bars i.warn{ background:var(--warn); }
+  .bars i.down{ background:var(--down); }
+  .bars i.nodata{ background:var(--nodata); }
+  .scale{ display:flex; justify-content:space-between; font-size:.75rem; color:var(--color-fg-subtle);
+          margin-top:7px; }
+
+  .legend{ display:flex; gap:16px; flex-wrap:wrap; font-size:.8rem; color:var(--color-fg-subtle);
+           margin:13px 3px 0; }
+  .legend span{ display:inline-flex; align-items:center; gap:6px; }
+  .legend i{ width:9px; height:9px; border-radius:2px; display:inline-block; }
+
+  .inc{ padding:17px 20px; border-top:1px solid var(--color-border); }
+  .inc:first-child{ border-top:0; }
+  .inchd{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:3px; }
+  .inchd .t{ font-weight:600; font-size:.95rem; }
+  .inc .when{ font-size:.8rem; color:var(--color-fg-subtle); margin-bottom:11px; }
+  .tl{ list-style:none; margin:0; padding:0 0 0 15px; border-left:2px solid var(--color-border-strong); }
+  .tl li{ position:relative; padding:0 0 9px 14px; font-size:.88rem; color:var(--color-fg-muted); }
+  .tl li:last-child{ padding-bottom:0; }
+  .tl li::before{ content:""; position:absolute; left:-21px; top:8px; width:7px; height:7px;
+                  border-radius:50%; background:var(--color-border-strong); }
+  .tl li.done::before{ background:var(--ok); }
+  .tl b{ color:var(--color-fg); font-weight:600; }
+  .tl .ts{ font-variant-numeric:tabular-nums; color:var(--color-fg-subtle); margin-right:7px; }
+  .empty{ padding:26px 20px; text-align:center; color:var(--color-fg-subtle); font-size:.9rem; }
+
+  .foot{ margin-top:26px; padding-top:17px; border-top:1px solid var(--color-border);
+         font-size:.82rem; color:var(--color-fg-subtle); display:flex; gap:8px; flex-wrap:wrap; }
+  .foot a{ color:var(--color-accent-fg); text-decoration:none; }
+  .foot a:hover{ text-decoration:underline; }
+
+  @media (max-width:620px){
+    .bars i:nth-child(-n+45){ display:none; }   /* narrow screens show the last 45 days */
+    .rowhd{ flex-wrap:wrap; gap:8px; }
+    .rowhd .ep{ width:100%; order:5; }
+  }
+  @media (prefers-reduced-motion:reduce){ .pulse{ animation:none; } *{ transition:none !important; } }
+</style>
+</head>
+<body>
+
+<nav class="nav">
+  <span class="brand">
+    <span class="logo"><svg viewBox="0 0 64 64" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round"><line x1="22" y1="8.5" x2="42" y2="8.5"/><line x1="17" y1="15" x2="47" y2="15"/><rect x="10" y="22" width="44" height="30" rx="6"/></svg></span>
+    <span>screen<span class="accent">where</span></span>
+    <span class="sep">/</span>
+    <span class="what" id="navWhat">stav služby</span>
+  </span>
+  <span class="grow"></span>
+  <a class="navlink" id="navApp" href="https://app.screenwhere.com/">Aplikace ↗</a>
+  <button class="theme" id="themeBtn" type="button">
+    <svg class="sun" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4.2"/><path d="M12 2.4v2.3M12 19.3v2.3M4.2 4.2l1.7 1.7M18.1 18.1l1.7 1.7M2.4 12h2.3M19.3 12h2.3M4.2 19.8l1.7-1.7M18.1 5.9l1.7-1.7"/></svg>
+    <svg class="moon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20.5 14.6A8.6 8.6 0 0 1 9.4 3.5a8.6 8.6 0 1 0 11.1 11.1Z"/></svg>
+  </button>
+  <button class="lang" id="langBtn" type="button">English</button>
+</nav>
+
+<div class="page">
+  <div class="banner b-stale" id="banner">
+    <span class="ico" id="bannerIco"></span>
+    <div>
+      <h1 id="bannerTitle">…</h1>
+      <p id="bannerText"></p>
+    </div>
+  </div>
+  <div class="checked">
+    <span class="pulse off" id="pulse"></span>
+    <span id="checkedText"></span>
+    <span class="dotsep">·</span>
+    <span id="whereText"></span>
+  </div>
+
+  <div class="sect"><h2 id="hComponents">Součásti</h2><span class="hint" id="hWindow"></span></div>
+  <div class="card" id="components"></div>
+  <div class="legend" id="legend"></div>
+
+  <div class="sect" style="margin-top:32px"><h2 id="hIncidents">Incidenty</h2><span class="hint" id="hIncWindow"></span></div>
+  <div class="card" id="incidents"></div>
+
+  <div class="foot">
+    <span id="footProbe"></span>
+    <a href="status.json" id="footJson">status.json</a>
+  </div>
+</div>
+
+<script type="module">
+// The strings and every count-next-to-a-noun rule live in i18n.js so the suite can render them
+// at 1, 2 and 5 rather than read them. Czech agreement is the fault this project ships most.
+import { STR, pct } from './i18n.js';
+
+// ── language ──────────────────────────────────────────────────────────────────
+// Public page, so the first guess comes from the browser rather than from us; the choice is
+// remembered because somebody who switched once did not mean "just this page view".
+let lang = localStorage.getItem('sw-status-lang')
+        || ((navigator.language || '').toLowerCase().startsWith('cs') ? 'cs' : 'en');
+
+const T = () => STR[lang];
+const p = (v) => pct(v, lang);        // "99,94 %" / "99.94 %"
+const dur = (min) => T().dur(min);    // "34 minuty" / "34 minutes"
+const ICONS = {
+  check:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>',
+  warn:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.3" stroke-linecap="round"><path d="M12 8v5"/><circle cx="12" cy="17" r="1.2" fill="currentColor" stroke="none"/></svg>',
+  down:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.6" stroke-linecap="round"><path d="M18 6 6 18M6 6l12 12"/></svg>',
+  quiet:'<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><circle cx="12" cy="12" r="8.4"/><path d="M12 7.6V12l2.8 1.9"/></svg>',
+};
+
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? '' : s).replace(/[<>&"]/g, (c) => ({ '<':'&lt;','>':'&gt;','&':'&amp;','"':'&quot;' }[c]));
+const L = (v) => (v && typeof v === 'object' ? (v[lang] ?? v.cs ?? v.en) : v);
+
+let data = null, loadFailed = false;
+
+async function load(){
+  try {
+    const res = await fetch('status.json', { cache: 'no-store' });
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    data = await res.json();
+    loadFailed = false;
+  } catch {
+    // The page could not even fetch its own state. That is a THIRD thing, distinct from "the
+    // service is down" and from "the data is old", and saying which one it is costs one branch.
+    loadFailed = true;
+  }
+  render();
+}
+
+function render(){
+  const t = T();
+  document.documentElement.lang = lang;
+  // The tab title is the page identity in a row of pinned tabs during an incident — it follows
+  // the language too, or the switch is only half done.
+  document.title = lang === 'cs' ? 'Screenwhere — stav služby' : 'Screenwhere — service status';
+  $('#navWhat').textContent = t.what;
+  $('#navApp').textContent = t.app;
+  $('#langBtn').textContent = t.other;
+  $('#hComponents').textContent = t.components;
+  $('#hIncidents').textContent = t.incidents;
+  $('#hWindow').textContent = t.window;
+  $('#hIncWindow').textContent = t.window;
+  $('#whereText').textContent = t.where;
+  $('#footProbe').textContent = t.probe;
+  syncTheme();   // the button's only text is its label, so it follows the language switch too
+  $('#legend').innerHTML = [['--ok-dim', t.legOk], ['--warn', t.legWarn], ['--down', t.legDown], ['--nodata', t.legNone]]
+    .map(([v, s]) => `<span><i style="background:var(${v})"></i>${esc(s)}</span>`).join('');
+
+  if (loadFailed || !data) return renderUnknown(t.xNoData, t.checkedNever, null);
+
+  // ── the staleness gate ──────────────────────────────────────────────────────
+  // Computed HERE, in the reader's browser, against the reader's clock. The file cannot do it:
+  // it was written before it went out of date.
+  const ageSec = Math.max(0, Math.round((Date.now() - Date.parse(data.generatedAt)) / 1000));
+  const stale = ageSec > (data.staleAfterMin || 15) * 60;
+  const checked = t.checked(ageSec);
+
+  if (stale) {
+    const mins = Math.round(ageSec / 60);
+    return renderUnknown(t.xStale(dur(mins)), checked, data, true);
+  }
+
+  const o = data.overall;
+  const aff = (data.affected || []).map(L).join(', ');
+  const un  = (data.unaffected || []).map(L).join(', ');
+  const view = o === 'down'    ? { cls:'b-down', ico:'down',  title:t.tDown,    text:t.xDown }
+             : o === 'partial' ? { cls:'b-down', ico:'down',  title:t.tPartial, text:t.xPartial(aff, un) }
+             : o === 'warn'    ? { cls:'b-warn', ico:'warn',  title:t.tWarn,    text:t.xWarn(aff, un) }
+             : o === 'ok'      ? { cls:'b-ok',   ico:'check', title:t.tOk,      text:t.xOk(data.overallPct) }
+             :                   { cls:'b-stale',ico:'quiet', title:t.tStale,   text:t.xNoData };
+
+  $('#banner').className = 'banner ' + view.cls;
+  $('#bannerIco').innerHTML = ICONS[view.ico];
+  $('#bannerTitle').textContent = view.title;
+  $('#bannerText').textContent = view.text;
+  $('#checkedText').textContent = checked;
+  $('#pulse').className = 'pulse' + (o === 'ok' ? '' : ' off');
+  renderComponents(false);
+  renderIncidents();
+}
+
+/** The banner when we are not entitled to claim a state — no data at all, or data too old. */
+function renderUnknown(text, checked, d, keepRows){
+  const t = T();
+  $('#banner').className = 'banner b-stale';
+  $('#bannerIco').innerHTML = ICONS.quiet;
+  $('#bannerTitle').textContent = t.tStale;
+  $('#bannerText').textContent = text;
+  $('#checkedText').textContent = checked;
+  $('#pulse').className = 'pulse off';
+  if (keepRows && d) renderComponents(true);
+  else $('#components').innerHTML = `<div class="empty">${esc(t.none)}</div>`;
+  renderIncidents();
+}
+
+function renderComponents(stale){
+  const t = T();
+  $('#components').innerHTML = (data.components || []).map((c) => {
+    const days = (c.days || []).slice();
+    // Today's column carries the CURRENT state, and grey when we have stopped believing our own
+    // data. Drawing it green under an "Outage" badge was the first thing clicking the mockup
+    // caught: the strip and the badge disagreed, and the eye believes the strip.
+    if (days.length) days[days.length - 1] = stale ? 'nodata' : ({ ok:'ok', warn:'warn', down:'down' }[c.state] || 'nodata');
+    const st = stale ? 'none' : (['ok','warn','down'].includes(c.state) ? c.state : 'none');
+    const pctTxt = c.uptime90 == null ? '—' : p(c.uptime90);
+    return `<div class="row">
+      <div class="rowhd">
+        <span class="nm">${esc(L(c.nm))}</span>
+        <span class="ep">${esc(L(c.ep))}</span>
+        <span class="grow"></span>
+        <span class="state s-${st}"><span class="d"></span>${esc(t[st])}</span>
+        <span class="pct num">${esc(pctTxt)}</span>
+      </div>
+      <div class="bars">${days.map((d, i) => {
+        const date = new Date(Date.now() - (days.length - 1 - i) * 86400000).toISOString().slice(0, 10);
+        return `<i class="${esc(d)}" title="${esc(date)} — ${esc(t[d === 'nodata' ? 'none' : d])}"></i>`;
+      }).join('')}</div>
+      <div class="scale"><span>${esc(t.scale90)}</span><span>${esc(t.scaleToday)}</span></div>
+    </div>`;
+  }).join('');
+}
+
+function renderIncidents(){
+  const t = T();
+  const list = (data && data.incidents) || [];
+  // The empty list is a real screen, not a fallback: it is what a healthy product shows for most
+  // of the year, so it says "nothing happened" rather than "no records".
+  if (!list.length) { $('#incidents').innerHTML = `<div class="empty">${esc(t.noIncidents)}</div>`; return; }
+  $('#incidents').innerHTML = list.map((n) => {
+    const d = n.minutes ? ' · ' + dur(n.minutes) : '';
+    const date = n.at ? new Date(n.at).toLocaleDateString(lang === 'cs' ? 'cs-CZ' : 'en-GB', { day:'numeric', month:'long', year:'numeric' }) : '';
+    return `<div class="inc">
+      <div class="inchd">
+        <span class="t">${esc(L(n.title))}</span>
+        <span class="state ${n.resolved ? 's-ok' : 's-warn'}"><span class="d"></span>${esc(n.resolved ? t.resolved : t.ongoing)}</span>
+      </div>
+      <div class="when">${esc(date + d)}</div>
+      <ul class="tl">${(n.timeline || []).map((s, i, all) => `<li class="${i === all.length - 1 && n.resolved ? 'done' : ''}">
+        <span class="ts num">${esc(s.at)}</span><b>${esc(L(s.label))}</b> — ${esc(L(s.text))}</li>`).join('')}</ul>
+    </div>`;
+  }).join('');
+}
+
+// ── theme ─────────────────────────────────────────────────────────────────────
+// Three states, not two: `light`, `dark`, and the EMPTY attribute meaning "whatever the machine
+// says". The stored choice is already on the element — the inline script in <head> put it there
+// ahead of the first paint — so this half owns only the button and what it announces.
+const root = document.documentElement;
+const isDark = () => getComputedStyle(root).getPropertyValue('color-scheme').includes('dark');
+
+function syncTheme(){
+  // The label names where the click GOES, not where we are: "switch to light" while dark. It is
+  // the only text on this button, so a screen reader has nothing else to go on.
+  const label = isDark() ? T().themeLight : T().themeDark;
+  const b = $('#themeBtn');
+  b.setAttribute('aria-label', label);
+  b.title = label;
+}
+
+$('#themeBtn').addEventListener('click', () => {
+  const next = isDark() ? 'light' : 'dark';
+  root.dataset.theme = next;
+  try { localStorage.setItem('sw-status-theme', next); } catch {}
+  syncTheme();
+});
+// An unset theme follows the machine, and has to keep following it while the tab is open: this
+// page is the one left open for hours during an incident, straight through a sunset schedule.
+matchMedia('(prefers-color-scheme: dark)').addEventListener('change', syncTheme);
+
+$('#langBtn').addEventListener('click', () => {
+  lang = lang === 'cs' ? 'en' : 'cs';
+  localStorage.setItem('sw-status-lang', lang);
+  render();
+});
+
+load();
+// Re-fetch while somebody is watching — during an incident this page is left open, and a
+// half-hour-old tab claiming "all systems operational" is the failure this page exists to avoid.
+setInterval(load, 60_000);
+// …and re-render on the minute regardless, so "last checked" ages honestly even if the fetch
+// keeps failing.
+setInterval(render, 20_000);
+</script>
+</body>
+</html>

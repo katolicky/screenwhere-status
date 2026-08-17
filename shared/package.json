@@ -1,0 +1,5 @@
+{
+  "//": "Exists so Node treats shared/discord.mjs as an ES module without a warning per run.",
+  "type": "module",
+  "private": true
+}

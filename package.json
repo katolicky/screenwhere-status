@@ -1,0 +1,14 @@
+{
+  "name": "screenwhere-status",
+  "private": true,
+  "type": "module",
+  "description": "Public status page + probe for screenwhere.com",
+  "scripts": {
+    "test": "./test.sh",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "typescript": "^5.5.0"
+  }
+}

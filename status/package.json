@@ -1,0 +1,10 @@
+{
+  "//": "NOT a fourth manifest — it declares no dependencies and nothing installs here.",
+  "//2": "It exists so Node treats status/i18.js as an ES module. That file is imported by the",
+  "//3": "page as `<script type=\"module\">` and by status/test-status.mjs as a real import, which",
+  "//4": "is the point: the strings the suite renders at 1, 2 and 5 are the strings the browser",
+  "//5": "gets. Without this, Node reparses it as ESM anyway and warns on every run.",
+  "//6": "tools/check-installs.mjs hardcodes the four real manifests, so this one is invisible to it.",
+  "type": "module",
+  "private": true
+}

@@ -1,0 +1,22 @@
+name: ci
+
+# Tests + typecheck on every push and PR. The probe workflow (status.yml) deliberately does
+# NOT run tests — it fires every five minutes and its job is to record a reading, not to
+# gate one; correctness is this workflow's job, on the cadence code actually changes.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - run: npm ci
+      - run: npm run typecheck
+      - run: ./test.sh
