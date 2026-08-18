@@ -11,6 +11,12 @@
 //   npx wrangler secret put GITHUB_PAT
 // GITHUB_PAT is a fine-grained PAT scoped to ONLY the screenwhere-status repository with
 // Actions: read and write — it can start this workflow and nothing else.
+//
+// ⚠️ Editing the secret in the Cloudflare DASHBOARD can leave the change staged while the
+// running version keeps the old value — the scheduled handler then 401s although "secret
+// list" shows the name. It cost a morning (2026-08-18). Prefer `wrangler secret put`, or
+// after any dashboard edit run `npx wrangler deploy` to force a version that reads the
+// stored value.
 
 const DISPATCH_URL =
   "https://api.github.com/repos/katolicky/screenwhere-status/actions/workflows/status.yml/dispatches";
