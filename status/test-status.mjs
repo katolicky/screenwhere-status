@@ -20,8 +20,8 @@ process.env.SW_STATUS_TIMEOUT_MS = "1500";
 process.env.SW_STATUS_SLOW_MS = "300";
 
 const { probeHttp, probeStun, probeAgents, COMPONENTS } = await import("./probe.mjs");
-const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, INFRA, WINDOW_DAYS } = await import("./history.mjs");
-const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR } = await import("./i18n.js");
+const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, hhmm, INFRA, WINDOW_DAYS, WHY_MAX, CADENCE_MIN } = await import("./history.mjs");
+const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR, dayTip } = await import("./i18n.js");
 const { decide, emptyAlert, view, send, downIds, mentionFor, STREAK } = await import("./alert.mjs");
 
 let pass = 0, fail = 0;
@@ -283,6 +283,94 @@ const T0 = Date.parse("2026-08-10T12:00:00Z");
   ok("published: incidents outside the window are dropped", s.incidents.length === 1 && s.incidents[0] === fresh);
 }
 
+// ── the day tooltip: what a bar can say when somebody hovers it (w-f40827) ────
+// A red bar that cannot say what happened is a colour, not a status page. These assertions are
+// about the two ways this could quietly go wrong: recording a colour without its cause, and
+// labelling a column with a date that came from the reader's clock instead of the file's.
+{
+  const T1 = Date.parse("2026-08-10T14:05:00Z");
+  let h = emptyHistory();
+  h = appendReading(h, reading(T1 - 3600_000, { app: "warn" }, { app: "answered in 3120 ms" }));
+  h = appendReading(h, reading(T1, { app: "down" }, { app: "HTTP 502, expected 200 (confirmed on retry)" }));
+  h = appendReading(h, reading(T1 + 300_000, { app: "down" }, { app: "fetch failed" }));
+  const d = h.days[dayKey(T1)].app;
+  ok("tooltip: a bad sample records WHEN, not just that it happened",
+    d.from === "13:05" && d.to === "14:10", `${d.from}–${d.to}`);
+  // The day is red. If the tooltip explained it with the morning's merely-slow sample, it would
+  // be answering a question nobody asked while the red went unexplained.
+  ok("tooltip: the reason follows the day's COLOUR — the first outage displaces a slow sample",
+    d.whyState === "down" && d.why.startsWith("HTTP 502"), d.why);
+  ok("tooltip: …and a later fault does not overwrite the onset — that is what an incident is for",
+    d.why.includes("502"));
+  ok("tooltip: an `ok` sample leaves no reason behind at all",
+    appendReading(emptyHistory(), reading(T1, { app: "ok" }, { app: "HTTP 200" })).days[dayKey(T1)].app.why === undefined);
+  ok("tooltip: the window's two ends are UTC, like the day key itself", hhmm(T1) === "14:05");
+
+  const long = "x".repeat(400);
+  const big = appendReading(emptyHistory(), reading(T1, { app: "down" }, { app: long })).days[dayKey(T1)].app;
+  // history.json is force-pushed every five minutes and status.json is re-fetched by every open
+  // tab every minute. An exception message is not allowed to be the size of the file.
+  ok("tooltip: a runaway detail is truncated before it enters the store", big.why.length === WHY_MAX);
+}
+{
+  const T1 = Date.parse("2026-08-10T14:05:00Z");
+  let h = emptyHistory();
+  h = appendReading(h, reading(T1, { app: "down", docs: "ok" }, { app: "HTTP 502, expected 200" }));
+  const s = buildStatus(h, [], T1);
+  const app = s.components.find((c) => c.id === "app");
+  const docs = s.components.find((c) => c.id === "docs");
+  ok("published: the dates the columns MEAN are in the file, not left to the browser's clock",
+    Array.isArray(s.dayKeys) && s.dayKeys.length === WINDOW_DAYS && s.dayKeys[WINDOW_DAYS - 1] === dayKey(T1));
+  ok("published: …and they line up one-for-one with the bars",
+    s.dayKeys.length === app.days.length);
+  ok("published: the probe cadence is published too — it is what turns samples into minutes",
+    s.cadenceMin === CADENCE_MIN);
+  ok("published: a day with trouble carries its facts", app.dayFacts[dayKey(T1)]?.down === 1);
+  // Ninety days × six components of "nothing happened" would be most of the file, and the file
+  // is re-fetched by every open tab once a minute.
+  ok("published: a day with nothing wrong carries none — the strip is not 540 empty objects",
+    Object.keys(docs.dayFacts).length === 0);
+  ok("published: the facts still name no customer", !/"setId"|"name"/.test(JSON.stringify(app.dayFacts)));
+}
+{
+  // The words themselves, at 1, 2 and 5 — the same rule as every other count on this page.
+  const f = { down: 3, warn: 2, from: "14:05", to: "14:20", why: "HTTP 502, expected 200" };
+  const cs = dayTip({ key: "2026-08-13", state: "down", facts: f, cadenceMin: 5 }, "cs");
+  ok("tooltip: the date is spelled out in the reader's language", cs.head === "13. srpna 2026");
+  ok("tooltip: the outage is stated in minutes, derived from the cadence",
+    cs.lines[0] === "Nedostupné přibližně 15 minut", cs.lines[0]);
+  ok("tooltip: a degraded stretch is named separately — slow is not absent",
+    cs.lines[1] === "Zhoršeně přibližně 10 minut", cs.lines[1]);
+  ok("tooltip: and the window says which hours it was", cs.lines[2] === "Problémy 14:05–14:20 UTC");
+  ok("tooltip: the probe's own sentence is carried apart from ours, and untranslated",
+    cs.why === "HTTP 502, expected 200" && !cs.lines.includes(cs.why));
+  const en = dayTip({ key: "2026-08-13", state: "down", facts: f, cadenceMin: 5 }, "en");
+  ok("tooltip: English gets English, including the date", en.head === "13 August 2026" && en.lines[0] === "Unavailable for about 15 minutes");
+  ok("czech: the derived duration inflects like every other count — 1 / 2 / 5",
+    dayTip({ key: "2026-08-13", state: "down", facts: { down: 1, warn: 0 }, cadenceMin: 1 }, "cs").lines[0] === "Nedostupné přibližně 1 minutu"
+    && dayTip({ key: "2026-08-13", state: "down", facts: { down: 2, warn: 0 }, cadenceMin: 1 }, "cs").lines[0] === "Nedostupné přibližně 2 minuty"
+    && dayTip({ key: "2026-08-13", state: "down", facts: { down: 5, warn: 0 }, cadenceMin: 1 }, "cs").lines[0] === "Nedostupné přibližně 5 minut");
+  ok("tooltip: a single bad sample says the minute, not a range of one",
+    dayTip({ key: "2026-08-13", state: "warn", facts: { down: 0, warn: 1, from: "09:00", to: "09:00" }, cadenceMin: 5 }, "cs").lines[1] === "Problém v 09:00 UTC");
+  const good = dayTip({ key: "2026-08-13", state: "ok" }, "cs");
+  ok("tooltip: a green day says the date and the state, and does not invent a story",
+    good.state === "Dostupné" && good.lines.length === 0 && good.why === "");
+  // The whole page's theme: grey means "we do not know", never "fine". The tooltip is the last
+  // place that could quietly turn it into a shrug.
+  const none = dayTip({ key: "2026-08-13", state: "nodata" }, "cs");
+  ok("tooltip: a grey day says `unknown, not fine` out loud, like the legend does",
+    none.lines[0] === STR.cs.legNone);
+  ok("tooltip: today is labelled as unfinished — its bar is a day in progress, not a verdict",
+    dayTip({ key: "2026-08-13", state: "ok", today: true }, "cs").head.endsWith("dnes, zatím"));
+  // ⚠️ The bar is a UTC day. Formatting it in the reader's zone would put yesterday's date on
+  // today's bar for everybody east of us, which is the exact bug the published dayKeys fix.
+  const tz = process.env.TZ;
+  process.env.TZ = "Pacific/Auckland";
+  ok("tooltip: the date is formatted in UTC, so a reader in Auckland sees the day we measured",
+    dayTip({ key: "2026-08-13", state: "ok" }, "en").head === "13 August 2026");
+  if (tz === undefined) delete process.env.TZ; else process.env.TZ = tz;
+}
+
 // ── Czech agreement: rendered at 1, 2 and 5, never read ───────────────────────
 // This is the fault this project ships most (v1.145.3 fixed eleven at once), and the reason
 // i18n.js is a module at all. A count frozen into a sentence is wrong the moment it is not 2.
@@ -312,8 +400,16 @@ ok("page: today's bar is painted from the current state, so the strip cannot con
 ok("page: it distinguishes `could not load` from `the service is down`", /xNoData/.test(page) && /loadFailed/.test(page));
 ok("page: it re-fetches while somebody watches — a stale open tab is the failure it exists to avoid",
   /setInterval\(load/.test(page));
+ok("page: the day bars are labelled from the published dates, not from the reader's clock",
+  /data\.dayKeys/.test(page) && !/new Date\(Date\.now\(\) - \(days\.length/.test(page));
+ok("page: a bar carries its sentence as an accessible name too — the tooltip is for pointers",
+  /role="img"[^`]*aria-label=/.test(page));
+ok("page: the tooltip is one node, refilled — not 540 of them saying nothing",
+  (page.match(/class="tip"/g) || []).length === 1 && /TIPS\[/.test(page));
+ok("page: a re-render drops the tooltip — the bar it pointed at is about to stop existing",
+  /hideTip\(\);\n  TIPS\.length = 0;/.test(page));
 ok("page: it loads the i18n module rather than carrying a second copy of the strings",
-  /import \{ STR, pct \} from '\.\/i18n\.js'/.test(page) && !/const STR = \{/.test(page));
+  /import \{ STR, pct, dayTip \} from '\.\/i18n\.js'/.test(page) && !/const STR = \{/.test(page));
 // ── the two themes ────────────────────────────────────────────────────────────
 // This page shipped dark-only: `data-theme="dark"` was welded onto the html element and there was
 // exactly one palette, so it stayed black on a light desktop. The assertions below guard the

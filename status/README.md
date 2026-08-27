@@ -30,12 +30,14 @@ already has a `stats.json` meaning *usage*.
 node status/run.mjs --dry        # probe production and print; writes nothing
 node status/run.mjs              # …and fold it into status/history.json, build status/public/
 node status/run.mjs --no-probe   # rebuild the page from the history already on disk
-node status/run.mjs --serve      # …and serve it on 127.0.0.1:8845 (SW_STATUS_PORT to move it)
+node status/run.mjs --serve      # …and serve it on 127.0.0.1:8845 (SW_STATUS_PORT to move it,
+                                 #  SW_STATUS_HOST to bind elsewhere — loopback by default)
 ```
 
 Environment (all optional, all with sane defaults): `SW_STATUS_BASE`, `SW_STATUS_TURN_HOST`,
 `SW_STATUS_TURN_PORT`, `SW_STATUS_TIMEOUT_MS`, `SW_STATUS_SLOW_MS`, `SW_STATUS_RETRY_MS`,
-`SW_STATUS_HISTORY`, `SW_STATUS_INCIDENTS`, `SW_STATUS_PUBLIC`, `SW_STATUS_PAT`, and for the
+`SW_STATUS_HISTORY`, `SW_STATUS_INCIDENTS`, `SW_STATUS_PUBLIC`, `SW_STATUS_PAT`,
+`SW_STATUS_CADENCE_MIN` (5 — how the tooltip turns failed samples into minutes), and for the
 alert: `SW_STATUS_DISCORD_WEBHOOK`, `SW_STATUS_DISCORD_MENTION`, `SW_STATUS_ALERT_STREAK`,
 `SW_STATUS_TZ` (default `Europe/Prague` — the zone the times in a message are written in; the
 history keys stay UTC).
@@ -71,6 +73,51 @@ maintains.
 ```
 
 Entries older than 90 days are dropped at build time, so the file can simply be appended to.
+
+## Hovering a day (`w-f40827`)
+
+A ninety-day strip whose bars can only be a colour makes somebody who sees red do the one thing
+a status page exists to prevent: ask us. So each bar says, on hover or tap, **which day it is**
+and — when that day had trouble — **what happened**:
+
+> **15. srpna 2026**  · Výpadek
+> Nedostupné přibližně 15 minut
+> Problémy 14:05–14:15 UTC
+> `HTTP 502, expected 200 (confirmed on retry)`
+
+Four decisions are worth keeping:
+
+- **The dates come from the file, never from the reader's clock.** `status.json` publishes
+  `dayKeys`, one per column, and the tooltip formats them **in UTC** — the store keys days in
+  UTC, so a reader east of us must not be shown yesterday's date on today's bar. The page used
+  to derive them with `Date.now()`, which relabelled every bar in a tab left open across
+  midnight and in any browser whose clock disagreed with ours.
+- **The minutes are derived, and say so.** Three failed probes are three five-minute windows in
+  which nothing answered, not a stopwatch — hence *přibližně* / *about*, and hence `cadenceMin`
+  being published rather than baked into the page. A cron that changes cadence changes the
+  sentence with it.
+- **The reason follows the day's colour.** `appendReading` keeps the first `down` detail of the
+  day, and lets it displace a `warn` one that arrived earlier: a red day has to explain the
+  failure that made it red. Later faults the same day belong in an incident, not in a tooltip.
+- **A grey day still speaks.** It says *unknown, not fine*, the same words as the legend — and
+  a day the page has stopped believing (today, past `staleAfterMin`) is given no facts to
+  narrate, even when the file has some.
+
+The probe's own sentence is quoted **verbatim and untranslated** (`HTTP 502, expected 200`): it
+is a measurement, and rewording it would leave it unmatchable against the logs of the run that
+produced it.
+
+It is a real element rather than a `title` attribute, and that is not decoration — a native
+tooltip appears after about a second, holds one line, and never appears at all on a phone, which
+is where a link to this page usually gets opened. The same sentence is also each bar's
+`aria-label` (`role="img"`), because a tooltip is a pointer affordance and the strip must not
+read as ninety anonymous rectangles to anybody who is not using one.
+
+⚠️ **Only the fade is animated.** Transitioning the tooltip's `transform` as well makes it fly
+in from the corner, and — the part that actually breaks — `getBoundingClientRect()` during that
+transition reports where the box is *on the way*, so the placement maths reads a rectangle that
+is not where the box will be. It is positioned while still `visibility:hidden`, which keeps its
+layout, and fades in already in the right place.
 
 ## What the page refuses to do
 

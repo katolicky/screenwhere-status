@@ -50,6 +50,7 @@
     --down-wash:rgba(194,42,42,.06); --down-line:rgba(194,42,42,.3);  --down-ico:rgba(194,42,42,.12);
     --ok-chip:rgba(15,122,23,.1); --warn-chip:rgba(138,92,5,.11); --down-chip:rgba(194,42,42,.09);
     --none-chip:rgba(10,15,10,.05); --stale-ico:rgba(10,15,10,.06);
+    --tip-shadow:rgba(10,15,10,.16);
     --ok-ring:rgba(15,122,23,.45); --ok-ring-0:rgba(15,122,23,0);
     --radius:18px; --radius-pill:999px;
     --font-ui:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;
@@ -71,6 +72,7 @@
     --down-wash:rgba(239,106,106,.1); --down-line:rgba(239,106,106,.4); --down-ico:rgba(239,106,106,.18);
     --ok-chip:rgba(45,209,64,.13); --warn-chip:rgba(230,180,80,.14); --down-chip:rgba(239,106,106,.14);
     --none-chip:rgba(255,255,255,.05); --stale-ico:rgba(255,255,255,.07);
+    --tip-shadow:rgba(0,0,0,.55);
     --ok-ring:rgba(45,209,64,.6); --ok-ring-0:rgba(45,209,64,0);
     color-scheme:dark;
   }
@@ -85,6 +87,7 @@
     --down-wash:rgba(239,106,106,.1); --down-line:rgba(239,106,106,.4); --down-ico:rgba(239,106,106,.18);
     --ok-chip:rgba(45,209,64,.13); --warn-chip:rgba(230,180,80,.14); --down-chip:rgba(239,106,106,.14);
     --none-chip:rgba(255,255,255,.05); --stale-ico:rgba(255,255,255,.07);
+    --tip-shadow:rgba(0,0,0,.55);
     --ok-ring:rgba(45,209,64,.6); --ok-ring-0:rgba(45,209,64,0);
     color-scheme:dark;
   }}
@@ -179,15 +182,40 @@
   .pct{ font-size:.84rem; color:var(--color-fg-muted); font-weight:600; white-space:nowrap; }
 
   .bars{ display:flex; gap:2px; align-items:stretch; height:32px; }
-  .bars i{ flex:1 1 0; min-width:2px; border-radius:2px; background:var(--ok-dim);
+  .bars i{ flex:1 1 0; min-width:2px; border-radius:2px; background:var(--ok-dim); cursor:default;
            transition:transform .12s var(--ease), filter .12s var(--ease); }
-  .bars i:hover{ transform:scaleY(1.14); filter:brightness(1.45); }
+  .bars i:hover,.bars i.on{ transform:scaleY(1.14); filter:brightness(1.45); }
   .bars i.ok{ background:var(--ok-dim); }
   .bars i.warn{ background:var(--warn); }
   .bars i.down{ background:var(--down); }
   .bars i.nodata{ background:var(--nodata); }
   .scale{ display:flex; justify-content:space-between; font-size:.75rem; color:var(--color-fg-subtle);
           margin-top:7px; }
+
+  /* ===== the day tooltip (w-f40827) =====
+     This was a native `title` and could not stay one: it appears after about a second, it holds
+     one line, it never appears at all on a phone, and — the point — the detail of the day's
+     failure is precisely what somebody hovering a red bar is hovering FOR.
+     `position:fixed` because the strip scrolls and the bars are 3 px wide; the placement code
+     clamps it to the viewport rather than letting a bar at the right edge push it off-screen. */
+  .tip{ position:fixed; top:0; left:0; z-index:60; max-width:min(320px,86vw); padding:9px 12px;
+        background:var(--color-surface); border:1px solid var(--color-border-strong);
+        border-radius:13px; box-shadow:0 9px 28px var(--tip-shadow);
+        font-size:.83rem; line-height:1.45; pointer-events:none;
+        opacity:0; visibility:hidden;
+        /* ⚠️ Only the fade is animated. Transitioning `transform` as well makes the box FLY in
+           from the corner on its first appearance and skate across the page between bars —
+           and, worse, getBoundingClientRect during that transition reports where it is on the
+           way, so the placement maths reads a rectangle that is not where the box will be. */
+        transition:opacity .13s var(--ease), visibility .13s; }
+  .tip.on{ opacity:1; visibility:visible; }
+  .tiphd{ display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .tiphd .dt{ font-weight:650; letter-spacing:-.01em; }
+  .tip .ln{ margin:4px 0 0; color:var(--color-fg-muted); }
+  /* The probe's own words, kept looking like a measurement rather than like prose — it is the
+     line somebody pastes into a search when they want the run that produced it. */
+  .tip .why{ margin-top:5px; font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+             font-size:.76rem; color:var(--color-fg-subtle); overflow-wrap:anywhere; }
 
   .legend{ display:flex; gap:16px; flex-wrap:wrap; font-size:.8rem; color:var(--color-fg-subtle);
            margin:13px 3px 0; }
@@ -262,6 +290,10 @@
   <div class="sect" style="margin-top:32px"><h2 id="hIncidents">Incidenty</h2><span class="hint" id="hIncWindow"></span></div>
   <div class="card" id="incidents"></div>
 
+  <!-- One node, moved and refilled. Ninety bars per row × six rows is 540 tooltips if each
+       carries its own, and they would all be in the DOM to say nothing. -->
+  <div class="tip" id="tip" role="status" aria-live="off"></div>
+
   <div class="foot">
     <span id="footProbe"></span>
     <a href="status.json" id="footJson">status.json</a>
@@ -271,7 +303,7 @@
 <script type="module">
 // The strings and every count-next-to-a-noun rule live in i18n.js so the suite can render them
 // at 1, 2 and 5 rather than read them. Czech agreement is the fault this project ships most.
-import { STR, pct } from './i18n.js';
+import { STR, pct, dayTip } from './i18n.js';
 
 // ── language ──────────────────────────────────────────────────────────────────
 // Public page, so the first guess comes from the browser rather than from us; the choice is
@@ -377,7 +409,12 @@ function renderUnknown(text, checked, d, keepRows){
 
 function renderComponents(stale){
   const t = T();
-  $('#components').innerHTML = (data.components || []).map((c) => {
+  // Every render replaces the bars, so the node the tooltip was anchored to is about to stop
+  // existing. Dropping it here is the difference between a tooltip and a sticker: this page
+  // re-fetches every minute, unprompted, under a stationary cursor.
+  hideTip();
+  TIPS.length = 0;
+  $('#components').innerHTML = (data.components || []).map((c, ci) => {
     const days = (c.days || []).slice();
     // Today's column carries the CURRENT state, and grey when we have stopped believing our own
     // data. Drawing it green under an "Outage" badge was the first thing clicking the mockup
@@ -393,14 +430,98 @@ function renderComponents(stale){
         <span class="state s-${st}"><span class="d"></span>${esc(t[st])}</span>
         <span class="pct num">${esc(pctTxt)}</span>
       </div>
-      <div class="bars">${days.map((d, i) => {
-        const date = new Date(Date.now() - (days.length - 1 - i) * 86400000).toISOString().slice(0, 10);
-        return `<i class="${esc(d)}" title="${esc(date)} — ${esc(t[d === 'nodata' ? 'none' : d])}"></i>`;
+      <div class="bars" role="group" aria-label="${esc(L(c.nm))} — ${esc(t.window)}">${days.map((d, i) => {
+        const tip = tipFor(ci, i, d, c, days.length);
+        // The visible tooltip is a pointer affordance and nothing else, so the same sentence is
+        // put on the bar as its accessible name — otherwise the strip reads to a screen reader
+        // as ninety anonymous rectangles, which is what it looked like with the native `title`
+        // gone. `role="img"` is what makes a label on an empty element get announced at all.
+        const label = [tip.head, tip.state, ...tip.lines, tip.why].filter(Boolean).join(' — ');
+        return `<i class="${esc(d)}" role="img" data-c="${ci}" data-d="${i}" aria-label="${esc(label)}"></i>`;
       }).join('')}</div>
       <div class="scale"><span>${esc(t.scale90)}</span><span>${esc(t.scaleToday)}</span></div>
     </div>`;
   }).join('');
 }
+
+/**
+ * The words for one bar, cached by [component][day] so the pointer handler does no formatting.
+ * Every entry is built during render, in the language rendered — a switch re-renders, so the
+ * cache cannot be left speaking the old one.
+ */
+const TIPS = [];
+function tipFor(ci, i, drawn, c, n){
+  const keys = data.dayKeys || [];
+  // The date the COLUMN means, from the file. The fallback is the build's own clock rather than
+  // the reader's, because those are different clocks and often different calendar days — the
+  // old code asked the browser, and a tab left open across midnight relabelled every bar.
+  const key = keys[i] || new Date(Date.parse(data.generatedAt) - (n - 1 - i) * 86400000).toISOString().slice(0, 10);
+  // `nodata` covers two different things — a day before the prober existed, and today after we
+  // stopped believing our own file. Neither is entitled to narrate an outage, so the facts are
+  // withheld there and the tooltip says the one true thing it knows.
+  const facts = drawn === 'nodata' ? null : ((c.dayFacts || {})[key] || null);
+  const tip = dayTip({ key, state: drawn, facts, cadenceMin: data.cadenceMin, today: i === n - 1 }, lang);
+  (TIPS[ci] = TIPS[ci] || [])[i] = tip;
+  return tip;
+}
+
+const tipEl = $('#tip');
+let tipBar = null;
+
+function showTip(bar){
+  const tip = (TIPS[+bar.dataset.c] || [])[+bar.dataset.d];
+  if (!tip) return;
+  if (tipBar && tipBar !== bar) tipBar.classList.remove('on');
+  tipBar = bar; bar.classList.add('on');
+  const st = bar.className.replace(' on', '').trim() || 'nodata';
+  tipEl.innerHTML = `<div class="tiphd"><span class="dt">${esc(tip.head)}</span>`
+    + `<span class="state s-${esc(st === 'nodata' ? 'none' : st)}"><span class="d"></span>${esc(tip.state)}</span></div>`
+    + tip.lines.map((l) => `<div class="ln">${esc(l)}</div>`).join('')
+    // The probe's own sentence about its own endpoint, kept visually apart from ours — it is a
+    // measurement quoted verbatim, not something this page wrote.
+    + (tip.why ? `<div class="why">${esc(tip.why)}</div>` : '');
+  // Placed while still hidden — `visibility:hidden` keeps its layout, so it can be measured
+  // and moved before anybody sees it, and it fades in already in the right place.
+  place(bar);
+  tipEl.classList.add('on');
+}
+
+/** Above the bar, centred on it, and never off the edge — the bars at both ends of a 90-day
+ *  strip are exactly where a centred box would hang outside the viewport. */
+function place(bar){
+  const b = bar.getBoundingClientRect();
+  const t = tipEl.getBoundingClientRect();
+  const m = 8;
+  let x = b.left + b.width / 2 - t.width / 2;
+  x = Math.max(m, Math.min(x, window.innerWidth - t.width - m));
+  // Below the bar when there is no room above it — on a phone the strips can sit near the top.
+  const above = b.top - t.height - 10;
+  tipEl.style.transform = `translate(${Math.round(x)}px, ${Math.round(above > m ? above : b.bottom + 10)}px)`;
+}
+
+function hideTip(){
+  if (tipBar) tipBar.classList.remove('on');
+  tipBar = null;
+  tipEl.classList.remove('on');
+  tipEl.style.transform = '';
+}
+
+const barAt = (e) => { const el = e.target; return el && el.matches && el.matches('.bars i[data-c]') ? el : null; };
+// Delegated, because the strips are replaced wholesale every time the page re-renders and
+// per-bar listeners would be re-attached 540 at a time, once a minute, forever.
+$('#components').addEventListener('pointerover', (e) => { const b = barAt(e); if (b) showTip(b); });
+$('#components').addEventListener('pointerout', (e) => {
+  // A touch "pointerout" arrives the moment the finger lifts, which would make the tooltip a
+  // flash. On touch it stays until the next tap somewhere else.
+  if (e.pointerType !== 'touch' && barAt(e)) hideTip();
+});
+// The tap that lands anywhere but a bar dismisses it — the phone's version of moving away.
+document.addEventListener('pointerdown', (e) => { if (!barAt(e)) hideTip(); }, true);
+document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideTip(); });
+// A fixed box does not travel with the bar it points at, so a scroll would leave it pointing at
+// nothing. Cheaper and more honest than re-placing it mid-scroll.
+addEventListener('scroll', hideTip, { passive: true });
+addEventListener('resize', hideTip);
 
 function renderIncidents(){
   const t = T();

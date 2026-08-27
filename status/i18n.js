@@ -66,6 +66,13 @@ export const STR = {
     legOk: "dostupné", legWarn: "zhoršené", legDown: "výpadek",
     legNone: "bez dat — nevíme, ne „v pořádku“",
     scale90: "před 90 dny", scaleToday: "dnes",
+    // The day-bar tooltip (w-f40827). `tipDown`/`tipWarn` take a duration DERIVED from the
+    // sample count, so they say "přibližně" — three failed probes are three five-minute windows
+    // in which we got no answer, not a stopwatch reading.
+    tipDown: (d) => `Nedostupné přibližně ${d}`,
+    tipWarn: (d) => `Zhoršeně přibližně ${d}`,
+    tipWindow: (a, b) => (a === b ? `Problém v ${a} UTC` : `Problémy ${a}–${b} UTC`),
+    tipToday: "dnes, zatím",
     where: "sonda běží mimo naši infrastrukturu",
     probe: "Sonda běží každých 5 minut mimo hlavní server.",
     noIncidents: "Za posledních 90 dní jsme nezaznamenali žádný incident.",
@@ -90,6 +97,10 @@ export const STR = {
     legOk: "available", legWarn: "degraded", legDown: "outage",
     legNone: "no data — “unknown”, not “fine”",
     scale90: "90 days ago", scaleToday: "today",
+    tipDown: (d) => `Unavailable for about ${d}`,
+    tipWarn: (d) => `Degraded for about ${d}`,
+    tipWindow: (a, b) => (a === b ? `Trouble at ${a} UTC` : `Trouble ${a}–${b} UTC`),
+    tipToday: "today, so far",
     where: "probed from outside our infrastructure",
     probe: "Probed every 5 minutes from off our main server.",
     noIncidents: "No incidents recorded in the last 90 days.",
@@ -107,3 +118,44 @@ export const STR = {
     dur: durEn,
   },
 };
+
+/**
+ * One day bar, in words (w-f40827).
+ *
+ * The owner's ask was "hovering a day shows its date, and if something happened that day, the
+ * detail of the problem too". Both halves live here rather than in index.html for the reason the
+ * rest of this module exists: these sentences put counts next to Czech nouns, and the suite has
+ * to render them at 1, 2 and 5 instead of reading them.
+ *
+ * ⚠️ `key` is the date the COLUMN means, taken from status.json — never one the browser worked
+ * out from its own clock. Formatting is pinned to UTC for the same reason the store is: the bar
+ * is a UTC day, and a reader in Auckland must not be shown yesterday's label on today's bar.
+ *
+ * @param {{ key:string, state:string, facts?:{down:number,warn:number,from?:string,to?:string,why?:string}|null, cadenceMin?:number, today?:boolean }} d
+ * @returns {{ head:string, state:string, lines:string[], why:string }}
+ */
+export function dayTip(d, lang) {
+  const t = STR[lang];
+  const locale = lang === "cs" ? "cs-CZ" : "en-GB";
+  const head = new Date(`${d.key}T12:00:00Z`).toLocaleDateString(locale, {
+    day: "numeric", month: "long", year: "numeric", timeZone: "UTC",
+  }) + (d.today ? ` · ${t.tipToday}` : "");
+  const state = t[d.state === "nodata" ? "none" : d.state] || t.none;
+  const lines = [];
+  let why = "";
+  // "No data" is a claim in its own right, and the page says so out loud everywhere else; the
+  // tooltip is not the place to let it read as a quiet grey nothing.
+  if (d.state === "nodata") lines.push(t.legNone);
+  const f = d.facts;
+  if (f) {
+    const cad = d.cadenceMin || 5;
+    if (f.down > 0) lines.push(t.tipDown(t.dur(f.down * cad)));
+    if (f.warn > 0) lines.push(t.tipWarn(t.dur(f.warn * cad)));
+    if (f.from && f.to) lines.push(t.tipWindow(f.from, f.to));
+    why = f.why || "";
+  }
+  // The probe's own sentence about its own endpoint — "HTTP 502, expected 200" — is returned
+  // apart from our lines, and deliberately untranslated: it is a measurement, and rewording it
+  // would leave it unmatchable against the logs of the run that produced it.
+  return { head, state, lines, why };
+}

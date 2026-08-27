@@ -87,6 +87,10 @@ if (argv.includes("--serve")) {
   const { createServer } = await import("node:http");
   const { extname } = await import("node:path");
   const port = Number(process.env.SW_STATUS_PORT || 8845);
+  // Loopback by default. This is a review server for one pair of eyes, and a dev tool that
+  // silently answers on every interface is how a machine ends up serving a half-built page to
+  // whatever else is listening on that port (the monorepo pays for this rule in its CLAUDE.md).
+  const host = process.env.SW_STATUS_HOST || "127.0.0.1";
   const TYPES = { ".html": "text/html", ".js": "text/javascript", ".json": "application/json" };
   createServer((q, s) => {
     const f = join(PUBLIC, (q.url === "/" ? "/index.html" : q.url || "/").split("?")[0]);
@@ -99,5 +103,5 @@ if (argv.includes("--serve")) {
     try { body = readFileSync(f); } catch { s.writeHead(404); return s.end("not found"); }
     s.writeHead(200, { "content-type": `${TYPES[extname(f)] || "text/plain"}; charset=utf-8`, "cache-control": "no-store" });
     s.end(body);
-  }).listen(port, () => console.log(`\n  http://127.0.0.1:${port}   (ctrl-c to stop)`));
+  }).listen(port, host, () => console.log(`\n  http://${host}:${port}   (ctrl-c to stop)`));
 }

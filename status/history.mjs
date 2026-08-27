@@ -15,13 +15,26 @@
 import { COMPONENTS } from "./probe.mjs";
 
 /** @typedef {"ok"|"warn"|"down"|"none"} State */
-/** @typedef {{ ok:number, warn:number, down:number }} Counts */
+/**
+ * One day of one component. The three counters are the whole uptime maths; `from`/`to`/`why`
+ * are carried ONLY on a day that had trouble, and exist so a day bar can be hovered and say
+ * WHAT happened (w-f40827) instead of only what colour it is.
+ * @typedef {{ ok:number, warn:number, down:number, from?:string, to?:string, why?:string, whyState?:"warn"|"down" }} Counts
+ */
 
 export const WINDOW_DAYS = 90;
 /** The page stops claiming anything once its data is older than this. See index.html. */
 export const STALE_AFTER_MIN = 15;
 /** The raw tail kept for debugging a fresh fault — 24 h at a 5-minute cadence. */
 export const KEEP_RECENT = 288;
+/** The probe cadence, in minutes — the Worker cron in worker/wrangler.toml. It is PUBLISHED
+ *  rather than assumed by the page, because it is the only thing that turns "three failed
+ *  samples" into "about fifteen minutes", and a page with the 5 baked in would go on saying
+ *  fifteen after the cron changed. */
+export const CADENCE_MIN = Number(process.env.SW_STATUS_CADENCE_MIN || 5);
+/** A probe detail is our own sentence about our own endpoint, but an exception message can be
+ *  arbitrarily long and this one ends up in a file every open tab re-fetches every minute. */
+export const WHY_MAX = 140;
 /** Components whose failure IS our outage. The site aggregate is reported but never drives the
  *  banner: one customer's box being switched off is not a Screenwhere incident, and a page that
  *  cried outage over it would be ignored by the third week. */
@@ -29,6 +42,8 @@ export const INFRA = ["app", "docs", "mcp", "whep", "turn"];
 
 /** UTC, because a prober on somebody else's fleet has no business inheriting its timezone. */
 export const dayKey = (ts) => new Date(ts).toISOString().slice(0, 10);
+/** …and the clock inside that day, same zone, for the tooltip's "14:05–14:20 UTC" line. */
+export const hhmm = (ts) => new Date(ts).toISOString().slice(11, 16);
 
 export const emptyHistory = () => ({ version: 1, days: /** @type {Record<string,Record<string,Counts>>} */ ({}), recent: /** @type {any[]} */ ([]), latest: /** @type {any} */ (null) });
 
@@ -53,7 +68,29 @@ export function appendReading(hist, reading, { windowDays = WINDOW_DAYS, keepRec
     // direction — counting it as up would flatter us, counting it as down would libel us.
     if (st !== "ok" && st !== "warn" && st !== "down") continue;
     const prev = day[c.id] || { ok: 0, warn: 0, down: 0 };
-    day[c.id] = { ...prev, [st]: prev[st] + 1 };
+    const next = { ...prev, [st]: prev[st] + 1 };
+    // A bad sample also leaves a trace of ITSELF, not just a tick in a column. Without this the
+    // day bar can be red and still have nothing to say when somebody hovers it, which is the
+    // moment they most want an answer (w-f40827).
+    if (st !== "ok") {
+      const at = hhmm(reading.ts);
+      // `from`/`to` span every non-ok sample of the day, degraded ones included — it is the
+      // window in which something was WRONG, and the tooltip labels it as exactly that rather
+      // than as the outage. Both are UTC, like dayKey: a window whose two ends were read in
+      // different zones is worse than no window.
+      if (!next.from) next.from = at;
+      next.to = at;
+      // The `why` follows the DAY'S COLOUR, not the clock: a red day has to explain the failure
+      // that made it red, even when the morning's merely-slow sample got here first. So the
+      // first `down` displaces a `warn` reason, and after that nothing displaces it — later
+      // faults on the same day belong in the incident timeline, not in a one-line tooltip.
+      const why = String(reading.detail?.[c.id] || "").slice(0, WHY_MAX);
+      if (why && (!next.why || (st === "down" && next.whyState !== "down"))) {
+        next.why = why;
+        next.whyState = st;
+      }
+    }
+    day[c.id] = next;
   }
   out.days[key] = day;
   out.recent.push({ ts: reading.ts, states: reading.states });
@@ -130,12 +167,24 @@ export function buildStatus(hist, incidents, now = Date.now()) {
     const counts = keys.map((k) => hist.days[k]?.[c.id]);
     const days = keys.map((k) => dayState(hist.days[k]?.[c.id]));
     const pct = displayPct(uptimePct(counts), anyDown(counts));
+    // Keyed by date and carried ONLY for the days that had trouble. A green day needs nothing
+    // beyond its date, and 90 × 6 objects of "nothing happened" would be most of a file that
+    // every open tab re-fetches once a minute.
+    /** @type {Record<string,{down:number,warn:number,from?:string,to?:string,why?:string}>} */
+    const dayFacts = {};
+    keys.forEach((k, i) => {
+      const d = hist.days[k]?.[c.id];
+      if (!d || (days[i] !== "down" && days[i] !== "warn")) return;
+      dayFacts[k] = { down: d.down, warn: d.warn,
+        ...(d.from ? { from: d.from } : {}), ...(d.to ? { to: d.to } : {}), ...(d.why ? { why: d.why } : {}) };
+    });
     return {
       id: c.id, nm: c.nm, ep: c.ep,
       state: /** @type {State} */ (latest?.states?.[c.id] || "none"),
       detail: latest?.detail?.[c.id] || "",
       uptime90: pct,
       days,
+      dayFacts,
     };
   });
   const infra = components.filter((c) => INFRA.includes(c.id));
@@ -150,6 +199,12 @@ export function buildStatus(hist, incidents, now = Date.now()) {
     generatedAt: new Date(latest?.ts || now).toISOString(),
     staleAfterMin: STALE_AFTER_MIN,
     windowDays: WINDOW_DAYS,
+    // ⚠️ The dates the columns MEAN, published rather than recomputed in the browser. The page
+    // used to derive them from the reader's own clock, which is a different clock and often a
+    // different calendar day: a stale file, a phone hours behind, or simply a tab left open
+    // across midnight all slid every label by a day while the bars stayed put (w-f40827).
+    dayKeys: keys,
+    cadenceMin: CADENCE_MIN,
     overall,
     overallPct,
     // Named so the banner can say what is NOT affected — "video is slow, control is not" is the
