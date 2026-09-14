@@ -11,7 +11,8 @@ import { readFileSync, writeFileSync, mkdirSync, copyFileSync, existsSync } from
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { runProbes } from "./probe.mjs";
-import { appendReading, buildStatus, emptyHistory } from "./history.mjs";
+import { appendReading, buildStatus, emptyHistory, lossAgainst } from "./history.mjs";
+import { ALLOW_RESET, readStore } from "./store.mjs";
 import { decide, emptyAlert, mentionFor, send, view } from "./alert.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -25,10 +26,24 @@ const argv = process.argv.slice(2);
 const noProbe = argv.includes("--no-probe");
 const dry = argv.includes("--dry");
 
-let hist = readJson(HISTORY, emptyHistory());
-// A history file that predates a schema change, or a half-written one, must not take the run
-// down — an empty store rebuilds itself in a day and a crashed cron reports nothing at all.
-if (!hist || typeof hist !== "object" || !hist.days) hist = emptyHistory();
+// 🚨 A store that cannot be read is NOT an empty store (w-2e88ec, 2026-09-14).
+//
+// This used to be `readJson(HISTORY, emptyHistory())` with a comment arguing that a half-written
+// file "must not take the run down — an empty store rebuilds itself in a day". Both halves were
+// wrong. It does not rebuild itself in a day: the very next step force-pushes the fresh store
+// over the durable branch, so the ninety-day bar loses ninety days and takes three months to
+// come back. And the run it spared went green while doing it, which is why the loss was found
+// four days later by a person looking at the page, not by the pipeline that caused it.
+//
+// Missing or empty IS a legitimate fresh start — fetch-history.mjs has already established that
+// the branch does not exist, and removed any stale copy. Anything else exits non-zero.
+const read = readStore(HISTORY);
+if (read.kind === "broken" && !ALLOW_RESET) {
+  console.log(`::error::${HISTORY}: ${read.why}. Refusing to run: appending to an empty store and publishing it would delete the history. SW_STATUS_ALLOW_RESET=1 resets it deliberately.`);
+  process.exit(1);
+}
+if (read.kind === "broken") console.log(`::warning::${HISTORY}: ${read.why} — SW_STATUS_ALLOW_RESET=1, starting empty on purpose.`);
+let hist = read.kind === "ok" ? read.hist : emptyHistory();
 
 if (!noProbe) {
   const reading = await runProbes();
@@ -36,7 +51,17 @@ if (!noProbe) {
   console.log(`${new Date(reading.ts).toISOString()}  ${line}`);
   for (const [k, v] of Object.entries(reading.detail)) if (reading.states[k] !== "ok") console.log(`    ${k}: ${v}`);
   if (dry) process.exit(0);
+  const before = hist;
   hist = appendReading(hist, reading);
+  // The same invariant the publish step asserts against the branch, asserted here against the
+  // store this process was handed: inside the window, a reading never un-happens. Cheap, and it
+  // is the half that catches a fold bug rather than a lost fetch.
+  const lost = lossAgainst(before, hist, reading.ts);
+  if (lost.length) {
+    console.log(`::error::Folding this reading in would destroy ${lost.length} earlier reading(s) — this is a bug in appendReading, not a bad file:`);
+    for (const l of lost.slice(0, 12)) console.log(`  ${l}`);
+    process.exit(1);
+  }
 
   // Alerting (w-bc5fa5). The decision is folded in BEFORE the history is written, and the
   // message is sent BEFORE `alert.state` flips on disk — so a webhook that does not go out

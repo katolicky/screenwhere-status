@@ -215,3 +215,45 @@ export function buildStatus(hist, incidents, now = Date.now()) {
     incidents: (incidents || []).filter((n) => !n.at || Date.parse(n.at) >= cutoff),
   };
 }
+
+/**
+ * 🚨 THE ONE INVARIANT THIS STORE HAS: inside the window, a reading never un-happens.
+ *
+ * Measured on 2026-09-14 (w-2e88ec): the live page drew 90 columns of which 85 said `nodata`,
+ * because on 10 September a run rebuilt the store from scratch and force-pushed it over ninety
+ * days of readings. 8 and 9 September had 296 successful runs each and not one of their samples
+ * survived. Nothing in the pipeline objected, because nothing in the pipeline ever compared the
+ * store it was about to publish with the one it was replacing.
+ *
+ * So this is that comparison, and it is deliberately about the PROPERTY rather than about the
+ * shape of that day's accident: within the 90-day window, a day may not disappear and no counter
+ * may go down. That is true of an empty store overwriting a full one, of a stale store from a
+ * racing run, of a half-written file — and of whatever the next cause turns out to be.
+ *
+ * Days OUTSIDE the window are exempt: `appendReading` prunes them on purpose, and a guard that
+ * called the daily prune "loss" would refuse every run on the ninety-first day.
+ *
+ * @param {any} before the store being replaced (the remote one, at push time)
+ * @param {any} after  the store about to be written
+ * @param {number} now the clock the window is measured from
+ * @returns {string[]} one sentence per lost reading — empty means nothing is lost
+ */
+export function lossAgainst(before, after, now = Date.now()) {
+  const cutoff = dayKey(now - (WINDOW_DAYS - 1) * 86_400_000);
+  const mine = (after && after.days) || {};
+  /** @type {string[]} */
+  const out = [];
+  for (const [day, comps] of Object.entries(((before && before.days) || {}))) {
+    if (day < cutoff) continue;
+    const day2 = mine[day];
+    if (!day2) { out.push(`${day}: the whole day would vanish (${Object.keys(comps || {}).length} component rows)`); continue; }
+    for (const [id, c] of Object.entries(comps || {})) {
+      const m = day2[id];
+      if (!m) { out.push(`${day}/${id}: the row would vanish (${(c.ok || 0) + (c.warn || 0) + (c.down || 0)} samples)`); continue; }
+      for (const k of /** @type {const} */ (["ok", "warn", "down"])) {
+        if ((m[k] || 0) < (c[k] || 0)) out.push(`${day}/${id}.${k}: ${c[k] || 0} → ${m[k] || 0}`);
+      }
+    }
+  }
+  return out;
+}

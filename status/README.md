@@ -19,10 +19,14 @@ already has a `stats.json` meaning *usage*.
 | `history.mjs` | The store and the shape the page reads. Pure; the suite runs it without a file. |
 | `alert.mjs` | Who gets told, and when. Pure decision + the sender; § Alerting below. |
 | `run.mjs` | One tick: probe → fold → alert → write `public/`. What the workflow calls. |
+| `store.mjs` | The store FILE and the branch it lives on: classify, write atomically, read/push a remote branch. |
+| `fetch-history.mjs` | First step of a tick — bring the branch's store onto the runner, or fail loudly. |
+| `publish-history.mjs` | Last step — check the push cannot lose readings, snapshot once a day, force-push. |
 | `index.html` | The page. Static, fetches `status.json`, decides its own staleness. |
 | `i18n.js` | Strings + every count-next-to-a-noun rule, as a module so the suite can render them. |
 | `incidents.json` | **Hand-written.** The one part no probe can produce. |
 | `test-status.mjs` | The suite. Run by `./test.sh` (and `./test.sh status`). |
+| `test-store.mjs` | The suite for the store and the two git steps — every way the history could vanish. |
 
 ## Running it by hand
 
@@ -37,6 +41,8 @@ node status/run.mjs --serve      # …and serve it on 127.0.0.1:8845 (SW_STATUS_
 Environment (all optional, all with sane defaults): `SW_STATUS_BASE`, `SW_STATUS_TURN_HOST`,
 `SW_STATUS_TURN_PORT`, `SW_STATUS_TIMEOUT_MS`, `SW_STATUS_SLOW_MS`, `SW_STATUS_RETRY_MS`,
 `SW_STATUS_HISTORY`, `SW_STATUS_INCIDENTS`, `SW_STATUS_PUBLIC`, `SW_STATUS_PAT`,
+`SW_STATUS_REMOTE` / `SW_STATUS_PUSH_URL` / `SW_STATUS_BRANCH` / `SW_STATUS_SNAPSHOT_BRANCH` /
+`SW_STATUS_ALLOW_RESET` (the store's branch plumbing — § Where the history lives),
 `SW_STATUS_CADENCE_MIN` (5 — how the tooltip turns failed samples into minutes), and for the
 alert: `SW_STATUS_DISCORD_WEBHOOK`, `SW_STATUS_DISCORD_MENTION`, `SW_STATUS_ALERT_STREAK`,
 `SW_STATUS_TZ` (default `Europe/Prague` — the zone the times in a message are written in; the
@@ -45,8 +51,34 @@ history keys stay UTC).
 ## Where the history lives
 
 On the orphan branch **`status-data`**, holding exactly one commit, force-pushed each run. At a
-five-minute cadence a commit per run would be 288 a day; `main` never sees any of them. The
-branch is data, not history — if it is ever lost the bar rebuilds itself a day at a time.
+five-minute cadence a commit per run would be 288 a day; `main` never sees any of them.
+
+🚨 **It is not "data, not history", and losing it is not cheap** — this section used to say the
+bar "rebuilds itself a day at a time", and that sentence is what made the loss below acceptable
+to everyone who read it. A ninety-day bar rebuilds itself in ninety days.
+
+**What happened (`w-2e88ec`, measured 2026-09-14).** The live page drew 90 columns of which 85
+said `nodata`; the branch held five days. 8 and 9 September had 296 successful runs each and not
+one of their samples survived: on 10 September a tick rebuilt the store from scratch and
+force-pushed it over everything. The pipeline never objected, because it never compared the
+store it was about to publish with the one it was replacing — and the run was green, so the loss
+was found four days later by a person looking at the page.
+
+Three things now stand between a bad tick and the history, and the first two are about telling
+apart the two cases the old shell could not:
+
+| | |
+|---|---|
+| `fetch-history.mjs` | "the branch does not exist" (a fresh start, said out loud, correct exactly once) vs. **"we could not read it"** — exit 1, history untouched. A lost tick costs one grey column. |
+| `run.mjs` | A store file that exists and is not a store **stops the tick**. It used to fall back to an empty history, silently, and the next step published that. |
+| `publish-history.mjs` | Re-reads the branch **at push time** and refuses a force-push that would lose a reading — `lossAgainst()` in `history.mjs`: inside the window no day disappears and no counter goes down. The branch is compared as it IS, not as this run fetched it, because ~296 runs a day against 288 slots means overlap is routine. |
+
+`SW_STATUS_ALLOW_RESET=1` is the deliberate way past the first two, for a human who has looked.
+
+**`status-data-daily`** is the recovery point: the store as it stood before the first tick of
+each UTC day. `status-data` has no parentage, so without it there is nothing to go back to —
+which is exactly the state the September wipe was discovered in. A failed snapshot warns and
+never fails the tick.
 
 ## Writing an incident
 

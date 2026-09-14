@@ -58,11 +58,23 @@ jobs:
 
       # The durable history lives on the orphan branch `status-data`, never on main. At a
       # five-minute cadence a commit per run is 288 commits a day — the branch therefore holds
-      # exactly ONE commit, amended by being rebuilt from scratch and force-pushed below.
+      # exactly ONE commit, rebuilt from scratch and force-pushed below.
+      #
+      # 🚨 THIS STEP USED TO BE TWO LINES OF SHELL, AND THEY DELETED NINETY DAYS OF READINGS
+      # (w-2e88ec, measured 2026-09-14):
+      #
+      #   git fetch origin status-data --depth=1 2>/dev/null || echo "no history branch yet"
+      #   git show FETCH_HEAD:history.json > status/history.json 2>/dev/null || echo "starting empty"
+      #
+      # Read as a sentence that says "start empty if there is no history yet". What it does is
+      # "start empty if ANYTHING goes wrong", and the publish step then force-pushes that empty
+      # store over the real one. On 10 September the store lost 8 and 9 September entirely —
+      # 296 successful runs each — and the run that did it was green, because both `2>/dev/null`
+      # threw away the evidence and the `>` truncated the destination before git even ran.
+      # The script tells "the branch does not exist" (fine, once) from "we could not read it"
+      # (exit 1, keep the history), and says which in the log.
       - name: Fetch history
-        run: |
-          git fetch origin status-data --depth=1 2>/dev/null || echo "no history branch yet — starting empty"
-          git show FETCH_HEAD:history.json > status/history.json 2>/dev/null || echo "starting empty"
+        run: node status/fetch-history.mjs
 
       - name: Probe
         env:
@@ -83,17 +95,18 @@ jobs:
           SW_STATUS_DISCORD_MENTION: ${{ secrets.SW_STATUS_DISCORD_MENTION }}
         run: node status/run.mjs
 
+      # 🚨 A force-push is checked BEFORE it happens, against the branch as it is at that
+      # moment — not against the copy this run fetched seconds earlier. The two differ in
+      # exactly the case that loses data: another run pushed in between. This repository fires
+      # ~296 runs a day against 288 five-minute slots (the Worker cron plus the `schedule`
+      # fallback), so overlap is the normal case, not an edge one. The invariant asserted is
+      # `lossAgainst` in status/history.mjs: inside the window, a day may not disappear and no
+      # counter may go down. A refusal costs one sample, which the page draws grey and labels
+      # "unknown, not fine"; the alternative was paid once, and cost ninety days.
       - name: Publish history
-        run: |
-          tmp=$(mktemp -d)
-          cp status/history.json "$tmp/history.json"
-          cd "$tmp"
-          git init -q -b status-data
-          git config user.name  "screenwhere-status"
-          git config user.email "status@screenwhere.com"
-          git add history.json
-          git commit -q -m "status history $(date -u +%FT%TZ)"
-          git push -q --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" status-data
+        env:
+          SW_STATUS_PUSH_URL: https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}
+        run: node status/publish-history.mjs
 
       # The page itself. Cloudflare Pages, because GitHub Pages will not serve a private repo
       # without a paid plan — and because Cloudflare already holds the DNS for the hostname.
