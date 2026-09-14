@@ -199,6 +199,15 @@ export function buildStatus(hist, incidents, now = Date.now()) {
     generatedAt: new Date(latest?.ts || now).toISOString(),
     staleAfterMin: STALE_AFTER_MIN,
     windowDays: WINDOW_DAYS,
+    // 🚨 How many of those ninety days we actually MEASURED (w-2e88ec). The page used to say
+    // "over the last 90 days we were available 99.98 %" from five days of samples, and the
+    // number was honest — `nodata` is folded into uptime in neither direction — while the
+    // sentence around it was not. The owner read the grey columns correctly and the headline
+    // wrongly, which is the page's own subject: never let silence render as knowledge.
+    daysWithData: keys.filter((k) => INFRA.some((id) => {
+      const c = hist.days[k]?.[id];
+      return !!c && (c.ok || 0) + (c.warn || 0) + (c.down || 0) > 0;
+    })).length,
     // ⚠️ The dates the columns MEAN, published rather than recomputed in the browser. The page
     // used to derive them from the reader's own clock, which is a different clock and often a
     // different calendar day: a stale file, a phone hours behind, or simply a tab left open

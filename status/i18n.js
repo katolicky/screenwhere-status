@@ -55,13 +55,43 @@ export function durEn(min) {
   return min < 60 ? u(min, "minute") : u(Math.floor(min / 60), "hour");
 }
 
+/**
+ * 🚨 Say how many days the number is actually made of (w-2e88ec).
+ *
+ * The bar is ninety columns wide because the window is ninety days; how many of them were
+ * MEASURED is a different number, and on 2026-09-14 it was five — the other 85 were grey
+ * because the history had been wiped. "Za posledních 90 dní jsme byli dostupní 99,98 %" was
+ * arithmetically honest (a day with no samples is folded into uptime in neither direction) and
+ * the sentence was still a claim about three months we could not make. The owner read the grey
+ * columns right and the headline wrong.
+ *
+ * So every string that would otherwise say "90 days" asks this first. A full window says the
+ * plain sentence, so nobody has to rediscover it; a partial one names its own span.
+ */
+/**
+ * How many of the bar's ninety columns the document has samples for — read from the document,
+ * never assumed. It lives HERE, beside the strings it feeds, so the suite can test the real
+ * decision rather than grep the page for the shape of a call: the first version of this guard
+ * asserted `t.window(dw)` in index.html and a sabotaged `const dw = 90` walked straight past it
+ * while staying green (the fault `CLAUDE.md` names — assert the property, not the shape).
+ *
+ * A document without the field is an older status.json: keep the original ninety-day wording
+ * rather than invent a smaller claim out of a missing number.
+ */
+export const daysOnRecord = (doc) => (doc && Number.isInteger(doc.daysWithData) ? doc.daysWithData : 90);
+
+export const dayCountCs = (n) => czPlural(n, "den", "dny", "dní");
+export const dayCountEn = (n) => `${n} day${n === 1 ? "" : "s"}`;
+
 export const STR = {
   cs: {
     what: "stav služby", app: "Aplikace ↗", other: "English",
     // The theme button carries no text, so these ARE its accessible name. They name the
     // destination of the click, not the state we are in.
     themeLight: "Přepnout na světlý režim", themeDark: "Přepnout na tmavý režim",
-    components: "Součásti", incidents: "Incidenty", window: "posledních 90 dní",
+    components: "Součásti", incidents: "Incidenty",
+    // `window` takes the number of days we have samples for, NOT the width of the bar.
+    window: (n) => (n >= 90 ? "posledních 90 dní" : `${dayCountCs(n)} se záznamem z 90`),
     ok: "Dostupné", warn: "Zhoršené", down: "Výpadek", none: "Bez dat",
     legOk: "dostupné", legWarn: "zhoršené", legDown: "výpadek",
     legNone: "bez dat — nevíme, ne „v pořádku“",
@@ -79,7 +109,9 @@ export const STR = {
     resolved: "Vyřešeno", ongoing: "Probíhá",
     tOk: "Všechny systémy fungují", tWarn: "Zhoršený provoz", tPartial: "Výpadek části služby",
     tDown: "Rozsáhlý výpadek", tStale: "Nevíme, jaký je stav",
-    xOk: (p) => (p == null ? "Sledujeme pět rovin služby." : `Za posledních 90 dní jsme byli dostupní ${pct(p, "cs")} času.`),
+    xOk: (p, n = 90) => (p == null ? "Sledujeme pět rovin služby."
+      : n >= 90 ? `Za posledních 90 dní jsme byli dostupní ${pct(p, "cs")} času.`
+      : `Za ${dayCountCs(n)} se záznamem jsme byli dostupní ${pct(p, "cs")} času.`),
     xWarn: (a, u) => `Zhoršeně odpovídá: ${a}.` + (u ? ` Ostatní roviny to neovlivňuje (${u}).` : ""),
     xPartial: (a, u) => `Neodpovídá: ${a}.` + (u ? ` Zbytek služby běží (${u}).` : ""),
     xDown: "Server neodpovídá na žádné rovině.",
@@ -92,7 +124,8 @@ export const STR = {
   en: {
     what: "service status", app: "The app ↗", other: "Česky",
     themeLight: "Switch to the light theme", themeDark: "Switch to the dark theme",
-    components: "Components", incidents: "Incidents", window: "last 90 days",
+    components: "Components", incidents: "Incidents",
+    window: (n) => (n >= 90 ? "last 90 days" : `${dayCountEn(n)} on record of 90`),
     ok: "Available", warn: "Degraded", down: "Outage", none: "No data",
     legOk: "available", legWarn: "degraded", legDown: "outage",
     legNone: "no data — “unknown”, not “fine”",
@@ -107,7 +140,9 @@ export const STR = {
     resolved: "Resolved", ongoing: "Ongoing",
     tOk: "All systems operational", tWarn: "Degraded performance", tPartial: "Partial outage",
     tDown: "Major outage", tStale: "We do not know the current state",
-    xOk: (p) => (p == null ? "We watch five planes of the service." : `We were available ${pct(p, "en")} of the time over the last 90 days.`),
+    xOk: (p, n = 90) => (p == null ? "We watch five planes of the service."
+      : n >= 90 ? `We were available ${pct(p, "en")} of the time over the last 90 days.`
+      : `We were available ${pct(p, "en")} of the time over the ${dayCountEn(n)} we have on record.`),
     xWarn: (a, u) => `Responding slowly: ${a}.` + (u ? ` Other planes are unaffected (${u}).` : ""),
     xPartial: (a, u) => `Not answering: ${a}.` + (u ? ` The rest of the service is up (${u}).` : ""),
     xDown: "The server is answering on no plane.",

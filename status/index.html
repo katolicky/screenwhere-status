@@ -303,7 +303,7 @@
 <script type="module">
 // The strings and every count-next-to-a-noun rule live in i18n.js so the suite can render them
 // at 1, 2 and 5 rather than read them. Czech agreement is the fault this project ships most.
-import { STR, pct, dayTip } from './i18n.js';
+import { STR, pct, dayTip, daysOnRecord } from './i18n.js';
 
 // ── language ──────────────────────────────────────────────────────────────────
 // Public page, so the first guess comes from the browser rather than from us; the choice is
@@ -352,8 +352,11 @@ function render(){
   $('#langBtn').textContent = t.other;
   $('#hComponents').textContent = t.components;
   $('#hIncidents').textContent = t.incidents;
-  $('#hWindow').textContent = t.window;
-  $('#hIncWindow').textContent = t.window;
+  // Days with samples, not the width of the bar (w-2e88ec) — asked of the document every time,
+  // with no local number in between for a later edit to pin.
+  const win = t.window(daysOnRecord(data));
+  $('#hWindow').textContent = win;
+  $('#hIncWindow').textContent = win;
   $('#whereText').textContent = t.where;
   $('#footProbe').textContent = t.probe;
   syncTheme();   // the button's only text is its label, so it follows the language switch too
@@ -380,7 +383,7 @@ function render(){
   const view = o === 'down'    ? { cls:'b-down', ico:'down',  title:t.tDown,    text:t.xDown }
              : o === 'partial' ? { cls:'b-down', ico:'down',  title:t.tPartial, text:t.xPartial(aff, un) }
              : o === 'warn'    ? { cls:'b-warn', ico:'warn',  title:t.tWarn,    text:t.xWarn(aff, un) }
-             : o === 'ok'      ? { cls:'b-ok',   ico:'check', title:t.tOk,      text:t.xOk(data.overallPct) }
+             : o === 'ok'      ? { cls:'b-ok',   ico:'check', title:t.tOk,      text:t.xOk(data.overallPct, daysOnRecord(data)) }
              :                   { cls:'b-stale',ico:'quiet', title:t.tStale,   text:t.xNoData };
 
   $('#banner').className = 'banner ' + view.cls;
@@ -430,7 +433,7 @@ function renderComponents(stale){
         <span class="state s-${st}"><span class="d"></span>${esc(t[st])}</span>
         <span class="pct num">${esc(pctTxt)}</span>
       </div>
-      <div class="bars" role="group" aria-label="${esc(L(c.nm))} — ${esc(t.window)}">${days.map((d, i) => {
+      <div class="bars" role="group" aria-label="${esc(L(c.nm))} — ${esc(t.window(daysOnRecord(data)))}">${days.map((d, i) => {
         const tip = tipFor(ci, i, d, c, days.length);
         // The visible tooltip is a pointer affordance and nothing else, so the same sentence is
         // put on the bar as its accessible name — otherwise the strip reads to a screen reader

@@ -21,7 +21,7 @@ process.env.SW_STATUS_SLOW_MS = "300";
 
 const { probeHttp, probeStun, probeAgents, COMPONENTS } = await import("./probe.mjs");
 const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, hhmm, INFRA, WINDOW_DAYS, WHY_MAX, CADENCE_MIN } = await import("./history.mjs");
-const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR, dayTip } = await import("./i18n.js");
+const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR, dayTip, daysOnRecord } = await import("./i18n.js");
 const { decide, emptyAlert, view, send, downIds, mentionFor, STREAK } = await import("./alert.mjs");
 
 let pass = 0, fail = 0;
@@ -283,6 +283,75 @@ const T0 = Date.parse("2026-08-10T12:00:00Z");
   ok("published: incidents outside the window are dropped", s.incidents.length === 1 && s.incidents[0] === fresh);
 }
 
+// ── how many days the headline is made of (w-2e88ec) ──────────────────────────
+// The bar is ninety columns wide because the window is ninety days. How many of them were
+// MEASURED is a different number, and on 2026-09-14 it was five: the history had been wiped and
+// 85 columns were grey, while the banner said "Za posledních 90 dní jsme byli dostupní 99,98 %".
+// The arithmetic was right — a day with no samples counts neither up nor down — and the sentence
+// was still a claim about three months nobody had watched. The owner read the grey columns
+// correctly and the headline wrongly, which is this page's own subject.
+{
+  let h = emptyHistory();
+  const T2 = Date.parse("2026-09-14T09:00:00Z");
+  for (let d = 4; d >= 0; d--) h = appendReading(h, reading(T2 - d * 86400000, { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "none" }));
+  const s = buildStatus(h, [], T2);
+  ok("window: the published document says how many days it actually measured",
+    s.daysWithData === 5 && s.windowDays === WINDOW_DAYS, `${s.daysWithData}/${s.windowDays}`);
+  ok("window: …and the day strip is still the full ninety columns",
+    s.components[0].days.length === WINDOW_DAYS);
+  // `site` is reported but never sampled without a PAT, and "we could not ask" is not a
+  // measurement in either direction — a day of those must not count as a day on record.
+  const only = buildStatus(appendReading(emptyHistory(), reading(T2, { app: "none", docs: "none", mcp: "none", whep: "none", turn: "none", site: "none" })), [], T2);
+  ok("window: a day of `none` samples is not a day with data", only.daysWithData === 0, String(only.daysWithData));
+  const full = buildStatus(appendReading(emptyHistory(), reading(T2, { app: "ok" })), [], T2);
+  ok("window: a day with one real sample is", full.daysWithData === 1);
+}
+{
+  // Czech agreement, at 1 / 2 / 5 as everything counted on this page is.
+  ok("window cs: 1 / 2 / 5 take den / dny / dní",
+    STR.cs.window(1) === "1 den se záznamem z 90" && STR.cs.window(2) === "2 dny se záznamem z 90" && STR.cs.window(5) === "5 dní se záznamem z 90",
+    [1, 2, 5].map((n) => STR.cs.window(n)).join(" | "));
+  ok("window en: the plural follows too",
+    STR.en.window(1) === "1 day on record of 90" && STR.en.window(5) === "5 days on record of 90");
+  // 🚨 The assertion that IS the fault: with a partial window, nothing on the page may claim to
+  // have watched ninety days. Written against the sentence rather than against the wording, so a
+  // reworded headline cannot slip past it — "z 90" / "of 90" is the shape that names the width
+  // of the bar, and anything else mentioning ninety days is the old claim coming back.
+  for (const lang of ["cs", "en"]) {
+    const said = [STR[lang].window(5), STR[lang].xOk(99.98, 5)].join(" ");
+    const claims = said.replace(/(?:z|of) 90\b/g, "");
+    ok(`window ${lang}: a five-day record never says ninety days were measured`,
+      !/90/.test(claims), said);
+    ok(`window ${lang}: …and it does say five`, /\b5\b/.test(said), said);
+  }
+  ok("window cs: a full window says the plain sentence, so nobody rediscovers it",
+    STR.cs.window(90) === "posledních 90 dní" && /posledních 90 dní/.test(STR.cs.xOk(99.98, 90)));
+  ok("window en: …in both languages",
+    STR.en.window(90) === "last 90 days" && /last 90 days/.test(STR.en.xOk(99.98, 90)));
+  ok("window: with no percentage there is no claim to qualify",
+    STR.cs.xOk(null, 5) === "Sledujeme pět rovin služby.");
+}
+{
+  // 🚨 The page must ASK THE DOCUMENT, and this is where the first version of this guard was
+  // itself the fault `CLAUDE.md` warns about: it asserted the SHAPE `t.window(dw)` in
+  // index.html, so sabotaging the page with `const dw = 90` left it green over a headline that
+  // claimed ninety measured days. The decision therefore lives in `daysOnRecord`, where the
+  // suite can run it, and the page has no local number for an edit to pin.
+  ok("window: the count is read from the document, field present",
+    daysOnRecord({ daysWithData: 5 }) === 5);
+  ok("window: an older document without the field keeps the ninety-day wording",
+    daysOnRecord({}) === 90 && daysOnRecord(null) === 90);
+  ok("window: a junk value is not trusted into the sentence",
+    daysOnRecord({ daysWithData: "5" }) === 90 && daysOnRecord({ daysWithData: 4.5 }) === 90);
+  const html = readFileSync(join(HERE, "index.html"), "utf8");
+  ok("window: the page imports that decision rather than keeping its own copy",
+    /import \{[^}]*daysOnRecord[^}]*\} from '\.\/i18n\.js'/.test(html));
+  ok("window: …and asks it at both the subhead and the banner, with nothing in between",
+    /t\.window\(daysOnRecord\(data\)\)/.test(html) && /t\.xOk\(data\.overallPct, daysOnRecord\(data\)\)/.test(html));
+  ok("window: no call site passes a literal day count",
+    !/t\.(window|xOk)\([^)]*\b90\b/.test(html), (html.match(/^.*t\.(window|xOk)\([^)]*90.*$/m) || [""])[0]);
+}
+
 // ── the day tooltip: what a bar can say when somebody hovers it (w-f40827) ────
 // A red bar that cannot say what happened is a colour, not a status page. These assertions are
 // about the two ways this could quietly go wrong: recording a colour without its cause, and
@@ -408,8 +477,11 @@ ok("page: the tooltip is one node, refilled — not 540 of them saying nothing",
   (page.match(/class="tip"/g) || []).length === 1 && /TIPS\[/.test(page));
 ok("page: a re-render drops the tooltip — the bar it pointed at is about to stop existing",
   /hideTip\(\);\n  TIPS\.length = 0;/.test(page));
+// The import LIST is deliberately not pinned here: it grew by one when `daysOnRecord` moved
+// into the module (w-2e88ec) and this assertion failed over a change that was the point of the
+// fix. What matters is that the strings come from the module and are not copied into the page.
 ok("page: it loads the i18n module rather than carrying a second copy of the strings",
-  /import \{ STR, pct, dayTip \} from '\.\/i18n\.js'/.test(page) && !/const STR = \{/.test(page));
+  /import \{[^}]*\bSTR\b[^}]*\} from '\.\/i18n\.js'/.test(page) && !/const STR = \{/.test(page));
 // ── the two themes ────────────────────────────────────────────────────────────
 // This page shipped dark-only: `data-theme="dark"` was welded onto the html element and there was
 // exactly one palette, so it stayed black on a light desktop. The assertions below guard the
