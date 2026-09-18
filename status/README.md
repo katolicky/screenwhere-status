@@ -40,7 +40,7 @@ node status/run.mjs --serve      # …and serve it on 127.0.0.1:8845 (SW_STATUS_
 
 Environment (all optional, all with sane defaults): `SW_STATUS_BASE`, `SW_STATUS_TURN_HOST`,
 `SW_STATUS_TURN_PORT`, `SW_STATUS_TIMEOUT_MS`, `SW_STATUS_SLOW_MS`, `SW_STATUS_RETRY_MS`,
-`SW_STATUS_HISTORY`, `SW_STATUS_INCIDENTS`, `SW_STATUS_PUBLIC`, `SW_STATUS_PAT`,
+`SW_STATUS_HISTORY`, `SW_STATUS_INCIDENTS`, `SW_STATUS_PUBLIC`,
 `SW_STATUS_REMOTE` / `SW_STATUS_PUSH_URL` / `SW_STATUS_BRANCH` / `SW_STATUS_SNAPSHOT_BRANCH` /
 `SW_STATUS_ALLOW_RESET` (the store's branch plumbing — § Where the history lives),
 `SW_STATUS_CADENCE_MIN` (5 — how the tooltip turns failed samples into minutes), and for the
@@ -189,8 +189,8 @@ apart from each other.
 > next hostname. Two details were added that day: the upload takes a folder or a ZIP but **not** a
 > single loose file, and step 5 does what it says but **not instantly** — the screen in between
 > asks for a manual record it does not need.
-> **`SW_STATUS_PAT` is deliberately unset** and the site-agent row reads *no data* on purpose —
-> see the end of this section. Nothing here is pending.
+> ✅ **`SW_STATUS_PAT` is RETIRED since `w-99ae61`** (2026-09-18) — it is not merely unset, there
+> is no longer anything for it to do. See the end of this section. Nothing here is pending.
 
 **Why it cannot be automated from here:** every step needs an authenticated Cloudflare session or
 the token that session produces, and a credential must not pass through an assistant or through
@@ -249,14 +249,24 @@ The domain is on Cloudflare Registrar under the `kac.dev` account (`docs/INFRA.m
 
    *Publish page* must read **success**, not *skipped*. Then open `https://status.screenwhere.com`.
 
-**`SW_STATUS_PAT` — deliberately NOT set (owner, 2026-08-13).** The site-agent row reads *no data*
-and that is the intended end state, not an unfinished step. Everything else works without it.
+**`SW_STATUS_PAT` — RETIRED (`w-99ae61`, 2026-09-18). Nothing reads it; do not set it.**
 
-**Why not:** this page is **public**. The probe is careful — `probeAgents()` reduces `/app/health`
-to two integers at the edge, so no set name and no customer name is ever written down or
-published. But `reachable/total` is *itself* a business fact: it would tell any visitor how many
-devices are in operation, and keep telling them, historically. The plan protected the *names* and
-never asked about the *count*. Asked directly, the owner said no.
+**The history, because the reasoning is still the reasoning.** It was deliberately NOT set on
+2026-08-13, and the site-agent row read *no data* on purpose. This page is **public**, and while
+the probe was careful with NAMES — `probeAgents()` reduced `/app/health` to two integers at the
+edge — `reachable/total` is *itself* a business fact: it would tell any visitor how many devices
+are in operation, and keep telling them, historically. The plan protected the names and never
+asked about the count; asked directly, the owner said no. So the row stayed dark, which was the
+right call and a real loss: the page said nothing about the devices at all.
+
+**What changed:** the trade was dissolved rather than settled. The relay now answers
+`/status-summary` — no credential, and a state plus a count of what is NOT working, never a
+total. Owner, 2026-09-18: *„Jedním ať to hlásí, že je vše ok. Případně že nefungují třeba 3
+zařízení. Ale nikdy není určeno z kolika."* So both aggregate rows light up, no secret exists to
+store or leak, and the count the 2026-08-13 decision was protecting never crosses the wire at
+all — `availPublicState()` reaches the verdict inside the relay, which is the only way a
+denominator can stay behind. ⚠️ Hiding it at THIS end would not have been the same thing: the
+version that shipped hours earlier wrote "2/2" straight into the public `status.json`.
 
 🚨 **And the instruction that used to sit here was impossible.** It read *"it must be a PAT that
 can do nothing but read"* — but **a PAT carries no scope**. `resolvePat()` answers `{email, role}`

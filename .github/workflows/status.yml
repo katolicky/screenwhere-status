@@ -78,9 +78,12 @@ jobs:
 
       - name: Probe
         env:
-          # Optional. Without it the site-agent row reports "no data" instead of disappearing.
-          # It must be a PAT with no more reach than reading /app/health.
-          SW_STATUS_PAT: ${{ secrets.SW_STATUS_PAT }}
+          # ✅ `SW_STATUS_PAT` is GONE (`w-99ae61`, 2026-09-18). The aggregate rows read the
+          # relay's `/status-summary`, which needs no credential — so this step now carries none
+          # for them at all. It is removed rather than left harmlessly empty: a secret named in a
+          # workflow is a secret somebody will eventually create, and the only one that could
+          # have worked here carried its owner's LIVE role into 133 of the relay's routes,
+          # sitting in the Actions secrets of a PUBLIC repository.
           # Outage alerting (w-bc5fa5). Optional in exactly the same way: absent, run.mjs still
           # decides and records the transition and prints a ::notice:: saying nothing was sent.
           #

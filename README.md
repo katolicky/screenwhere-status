@@ -30,8 +30,11 @@ history and the probe design were always public; credentials stay in GitHub secr
 | `SW_STATUS_DISCORD_WEBHOOK` | optional | outage alert channel |
 | `SW_STATUS_DISCORD_MENTION` | optional | `@here`, `<@&roleid>` or a bare user id to ride above the alert card |
 
-`SW_STATUS_PAT` is deliberately **not** set (owner decision, 2026-08-13): the site-agent row
-reads "no data" on purpose — a public `reachable/total` count is itself a disclosure.
+`SW_STATUS_PAT` is **retired** (`w-99ae61`, 2026-09-18) — nothing reads it. It had been
+deliberately unset since 2026-08-13 because a public `reachable/total` is itself a disclosure,
+which left the site-agent row dark. The relay's `/status-summary` now answers with no credential
+at all, and with a state plus a count of what is NOT working rather than a ratio, so the row can
+light up without publishing how many devices exist.
 
 The Worker needs one secret of its own (`GITHUB_PAT`, via `wrangler secret put`): a
 fine-grained PAT scoped to only this repository with Actions read/write.

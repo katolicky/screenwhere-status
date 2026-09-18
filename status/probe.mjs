@@ -138,36 +138,14 @@ export function probeStun(host = TURN_HOST, port = TURN_PORT, id = "turn") {
  * healthy until enough failed samples accumulate, which is the right answer to "what shape has it
  * been in" and the wrong one to "is it up now" — which is what this row has always said.
  *
- * It is also the only probe with a credential (a PAT in SW_STATUS_PAT). Without one the row says
- * "no data" rather than disappearing: a component that vanishes when it cannot be measured is how
- * a page ends up quietly narrower than the service it describes.
+ * ✅ It no longer needs a credential at all (`w-99ae61`). It used to be the only probe with one,
+ * and that PAT had to belong to a SUPERADMIN to see the whole installation — sitting in this
+ * public repository's Actions secrets. `/status-summary` answers the same question to anybody
+ * and the secret is gone.
  * @returns {Promise<Reading & { total?:number, reachable?:number }>}
  */
 export async function probeAgents(id = "site") {
-  const pat = process.env.SW_STATUS_PAT;
-  if (!pat) return { id, state: "none", ms: 0, detail: "no SW_STATUS_PAT configured" };
-  const t0 = Date.now();
-  try {
-    const res = await fetch(`${BASE}/app/availability?summary=1`, {
-      headers: { authorization: `Bearer ${pat}`, "user-agent": "screenwhere-status-probe" },
-      cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS),
-    });
-    const ms = Date.now() - t0;
-    // ⚠️ "We could not ask" is NOT "they are down". When the relay is gone the infrastructure rows
-    // already say so in red; claiming the agents are down too would be asserting something we did
-    // not observe. This is the one place the built page differs from the approved mockup, where
-    // the major-outage state painted this row red. It also covers the two-release window in which
-    // this page is newer than the relay: an older relay ignores `?summary=1` and answers something
-    // with no `live` in it, which must read "could not ask" and never "down".
-    if (!res.ok) return { id, state: "none", ms, detail: `could not ask: HTTP ${res.status}` };
-    const box = (await res.json())?.live?.box;
-    if (!box || typeof box.total !== "number") return { id, state: "none", ms, detail: "could not ask: no live box count" };
-    const total = box.total, reachable = box.online || 0;
-    const state = /** @type {State} */ (total === 0 ? "none" : reachable === total ? "ok" : reachable === 0 ? "down" : "warn");
-    return { id, state, ms, detail: `${reachable}/${total}`, total, reachable };
-  } catch (e) {
-    return { id, state: "none", ms: Date.now() - t0, detail: `could not ask: ${String((e && /** @type {Error} */ (e).message) || e)}` };
-  }
+  return probePublic(id, "box");
 }
 
 /**
@@ -194,29 +172,49 @@ export async function probeAgents(id = "site") {
  * @returns {Promise<Reading & { total?:number, reachable?:number }>}
  */
 export async function probePlugs(id = "plugs") {
-  const pat = process.env.SW_STATUS_PAT;
-  if (!pat) return { id, state: "none", ms: 0, detail: "no SW_STATUS_PAT configured" };
+  return probePublic(id, "plug");
+}
+
+/**
+ * Both aggregate rows, from ONE public endpoint (`w-99ae61`).
+ *
+ * 🚨 NO CREDENTIAL. `/status-summary` needs none — which is what replaced a PAT carrying its
+ * owner's LIVE role into 133 of the relay's routes, sitting in THIS PUBLIC REPOSITORY's Actions
+ * secrets. There is now nothing here to store, rotate, leak or revoke.
+ *
+ * 🚨 AND NO DENOMINATOR. Owner, 2026-09-18: *„Nechci veřejně zobrazovat, kolik mám zařízení …
+ * ale nikdy není určeno z kolika."* The version before this built `detail` as "2/2" and "1/2"
+ * and wrote it into the public `status.json` — and the agent row had done so since it was
+ * written. The relay reaches the verdict itself and sends a state plus a count of what is NOT
+ * working, so the total does not arrive here to be leaked by accident.
+ *
+ * ⚠️ `detail` therefore carries the FAILING count and never a ratio. `history.mjs` keeps it
+ * verbatim in a public file, so anything put here is published.
+ * @param {string} id @param {"plug"|"box"} kind
+ * @returns {Promise<Reading & { failing?:number }>}
+ */
+async function probePublic(id, kind) {
   const t0 = Date.now();
   try {
-    const res = await fetch(`${BASE}/app/availability?summary=1`, {
-      headers: { authorization: `Bearer ${pat}`, "user-agent": "screenwhere-status-probe" },
+    const res = await fetch(`${BASE}/status-summary`, {
+      headers: { "user-agent": "screenwhere-status-probe" },
       cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const ms = Date.now() - t0;
+    // ⚠️ "We could not ask" is NOT "they are down" — the same rule this file has always kept, and
+    // it also covers the two-release window in which this page is newer than the relay: an older
+    // relay has no `/status-summary` at all and answers 404, which must read "could not ask".
     if (!res.ok) return { id, state: "none", ms, detail: `could not ask: HTTP ${res.status}` };
-    const p = (await res.json())?.kinds?.plug;
-    if (!p || typeof p.total !== "number") return { id, state: "none", ms, detail: "could not ask: no plug summary" };
-    const total = p.total, reachable = p.ok || 0;
-    // Measured = everything the relay actually has an answer about. A plug that is only `none`
-    // must not drag the row red, and must not silently count as healthy either: it is simply
-    // outside the denominator, and the detail says how many that was.
-    const measured = total - (p.none || 0);
-    const state = /** @type {State} */ (
-      total === 0 || measured === 0 ? "none"
-        : reachable === measured ? "ok"
-        : reachable === 0 ? "down" : "warn");
-    const unmeasured = (p.none || 0) ? ` (+${p.none} ?)` : "";
-    return { id, state, ms, detail: `${reachable}/${measured}${unmeasured}`, total, reachable };
+    const k = (await res.json())?.kinds?.[kind];
+    if (!k || typeof k.state !== "string") return { id, state: "none", ms, detail: "could not ask: no summary" };
+    const failing = Number(k.failing) || 0;
+    // ⚠️ `detail` is published verbatim into the public `status.json` and shown in a day's
+    // tooltip, so a bare number would be a meaningless "3" in a public file. It is written the
+    // way this file's other probes write measurements ("HTTP 200", "STUN binding success in
+    // 273 ms") — and crucially WITHOUT a denominator: never "3/7", which is the exact disclosure
+    // the 2026-08-13 decision to leave this row dark was protecting.
+    return { id, state: /** @type {State} */ (k.state), ms,
+      detail: failing > 0 ? `${failing} failing` : "all ok", failing };
   } catch (e) {
     return { id, state: "none", ms: Date.now() - t0, detail: `could not ask: ${String((e && /** @type {Error} */ (e).message) || e)}` };
   }
