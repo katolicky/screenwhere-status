@@ -67,8 +67,26 @@ ok("probes: /mcp expects 405 — a method refusal is a live answer, not a fault"
   COMPONENTS.find((c) => c.id === "mcp")?.expect?.includes(405) === true);
 ok("probes: /mcp does NOT accept 200 — that would mean something else is answering",
   COMPONENTS.find((c) => c.id === "mcp")?.expect?.includes(200) === false);
-ok("probes: the four HTTP planes and coturn are all present, and the agent row is last",
-  COMPONENTS.map((c) => c.id).join(",") === "app,docs,mcp,whep,turn,site");
+// ⚠️ This used to be `ids.join(",") === "app,docs,mcp,whep,turn,site"` — a literal exemplar of
+// the layout on the day it was written, which went red the moment a SIXTH row was added
+// (`w-1567c7`, the plugs) without anything actually being wrong. The property it was reaching
+// for is two things, so it is two assertions: the infrastructure this page exists to report is
+// all there and comes first, and the rows that need a CREDENTIAL — the ones reduced to a count
+// because they describe somebody's premises — come after it. A new row of either kind is then a
+// change to the list below, not a mystery failure.
+{
+  const ids = COMPONENTS.map((c) => c.id);
+  const infra = ["app", "docs", "mcp", "whep", "turn"];
+  ok("probes: the four HTTP planes and coturn are all present, and first",
+    ids.slice(0, infra.length).join(",") === infra.join(","));
+  const aggregates = COMPONENTS.filter((c) => c.kind === "agents" || c.kind === "plugs");
+  ok(`probes: every anonymised aggregate row comes after the infrastructure (${aggregates.length})`,
+    aggregates.length >= 2 && aggregates.every((c) => ids.indexOf(c.id) >= infra.length));
+  // …and each of them says so on the page, rather than looking like a per-device row that
+  // happens to be short. The endpoint label is the only place a reader is told.
+  ok("probes: an aggregate row labels itself as an aggregate with no identity",
+    aggregates.every((c) => /souhrn|aggregate/.test(JSON.stringify(c.ep))));
+}
 
 {
   const s = await serve((_q, r) => { r.writeHead(200); r.end("ok"); });
@@ -130,6 +148,92 @@ ok("probes: the four HTTP planes and coturn are all present, and the agent row i
   const r = await probeStun("127.0.0.1", s.port);
   ok("stun: silence is `down`, and it says so rather than hanging", r.state === "down" && /no STUN answer/.test(r.detail));
   s.close();
+}
+
+// ── the plug aggregate (`w-1567c7`): a count, never a name, and `none` is never `down` ──────
+// The plug is the EMERGENCY path — a hard power-cycle when a television or an agent wedges —
+// and it lives on a customer LAN behind NAT, so this runner can never probe one. What arrives
+// is the site agent's own measurement, already reduced by the relay to four integers.
+const plugSrv = async (kinds) => {
+  const s = await serve((q, r) => {
+    if (!String(q.url).startsWith("/app/availability")) { r.writeHead(404); return r.end(); }
+    r.writeHead(200, { "content-type": "application/json" });
+    r.end(JSON.stringify({ ok: true, ts: Date.now(), kinds }));
+  });
+  process.env.SW_STATUS_BASE = s.url;
+  process.env.SW_STATUS_PAT = "pat_test";
+  const mod = await import("./probe.mjs?plugs" + Math.random());
+  const r = await mod.probePlugs();
+  s.close();
+  return r;
+};
+{
+  delete process.env.SW_STATUS_PAT;
+  const r = await (await import("./probe.mjs?nopat" + Math.random())).probePlugs();
+  ok("plugs: with no PAT the row reads `none` — it does not vanish and does not claim down",
+    r.state === "none");
+}
+{
+  const r = await plugSrv({ plug: { total: 2, ok: 2, warn: 0, bad: 0, none: 0 }, box: { total: 1, ok: 1, warn: 0, bad: 0, none: 0 } });
+  ok("plugs: every measured plug answering is `ok`", r.state === "ok" && r.detail === "2/2");
+}
+{
+  const r = await plugSrv({ plug: { total: 3, ok: 2, warn: 1, bad: 0, none: 0 }, box: { total: 0, ok: 0, warn: 0, bad: 0, none: 0 } });
+  ok("plugs: one shaky plug out of three is `warn`", r.state === "warn" && r.detail === "2/3");
+}
+{
+  const r = await plugSrv({ plug: { total: 2, ok: 0, warn: 0, bad: 2, none: 0 }, box: { total: 0, ok: 0, warn: 0, bad: 0, none: 0 } });
+  ok("plugs: none of them answering is `down`", r.state === "down");
+}
+{
+  // 🚨 THE ASSERTION THIS ROW RESTS ON. A plug nobody measured in the last hour — a relay
+  // restart, a deploy, an agent that has not reported yet — has NOT been observed failing.
+  // Counting it as down publishes an outage that never happened, on a page strangers read
+  // precisely when they suspect one. It is outside the denominator and the detail says so.
+  const r = await plugSrv({ plug: { total: 3, ok: 2, warn: 0, bad: 0, none: 1 }, box: { total: 0, ok: 0, warn: 0, bad: 0, none: 0 } });
+  ok("plugs: an unmeasured plug is NOT counted as down — it leaves the denominator",
+    r.state === "ok" && r.detail === "2/2 (+1 ?)");
+}
+{
+  // …and when NOTHING was measured, the row says so rather than reporting a healthy 0/0.
+  const r = await plugSrv({ plug: { total: 2, ok: 0, warn: 0, bad: 0, none: 2 }, box: { total: 0, ok: 0, warn: 0, bad: 0, none: 0 } });
+  ok("plugs: all of them unmeasured reads `none`, not `ok` and not `down`", r.state === "none");
+}
+{
+  // 🚨 THE STATE THAT WILL ACTUALLY HAPPEN, and the reason it has a test of its own: these are
+  // two repositories with two releases, so for a while the page is deployed against a relay that
+  // does not serve `?summary=1` yet. An older relay ignores the parameter and answers the FULL
+  // per-device list, which has no `kinds` — the row must read "could not ask" and must certainly
+  // not read `down`, which would announce an outage caused by our own deploy order.
+  const s = await serve((q, r) => {
+    r.writeHead(200, { "content-type": "application/json" });
+    r.end(JSON.stringify({ ok: true, ts: Date.now(), devices: [{ key: "plug:aa", kind: "plug", name: "Zasedačka", hours: {} }] }));
+  });
+  process.env.SW_STATUS_BASE = s.url; process.env.SW_STATUS_PAT = "pat_test";
+  const r = await (await import("./probe.mjs?old" + Math.random())).probePlugs();
+  ok("plugs: a relay too old to know `?summary=1` reads `could not ask`, never `down`",
+    r.state === "none" && /could not ask/.test(r.detail));
+  // …and not even in that case does a name reach the reading.
+  ok("plugs: …and the old relay's device list does not leak a name into the reading",
+    !/Zasedačka/.test(JSON.stringify(r)));
+  s.close();
+}
+{
+  // The relay answering something unexpected is "could not ask", never a verdict about plugs.
+  const s = await serve((q, r) => { r.writeHead(500); r.end("boom"); });
+  process.env.SW_STATUS_BASE = s.url; process.env.SW_STATUS_PAT = "pat_test";
+  const r = await (await import("./probe.mjs?err" + Math.random())).probePlugs();
+  ok("plugs: a relay that will not answer is `could not ask`, not `down`",
+    r.state === "none" && /could not ask/.test(r.detail));
+  s.close();
+}
+{
+  // 🚨 And the privacy invariant, asserted the same way the agent row's is. The relay reduces at
+  // the SOURCE so a name should never arrive — this proves the probe would not pass one on if a
+  // future field ever carried it.
+  const r = await plugSrv({ plug: { total: 1, ok: 1, warn: 0, bad: 0, none: 0, ip: "192.168.50.116", name: "Zasedačka" }, box: { total: 0, ok: 0, warn: 0, bad: 0, none: 0 } });
+  ok("plugs: NO identity survives the probe — not in a field, not in `detail`",
+    !/Zasedačka|192\.168/.test(JSON.stringify(r)));
 }
 
 // ── the site aggregate: a count, and never a name ─────────────────────────────

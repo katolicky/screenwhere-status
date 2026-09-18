@@ -49,6 +49,11 @@ export const COMPONENTS = [
   { id: "whep", kind: "http", path: "/whep",  expect: [200], nm: { cs: "Video (WHEP)",          en: "Video (WHEP)" },   ep: "/whep" },
   { id: "turn", kind: "stun",                                nm: { cs: "TURN relay (coturn)",   en: "TURN relay (coturn)" }, ep: "udp/3478 · STUN" },
   { id: "site", kind: "agents",                              nm: { cs: "Zařízení na místě",     en: "Site agents" },    ep: { cs: "souhrn, bez identity", en: "aggregate, no identity" } },
+  // `w-1567c7`. Plugs are the EMERGENCY path — a hard power-cycle of the wall socket is the last
+  // lever the product has when a television or an agent wedges — and until 2026-09-18 nothing
+  // measured them continuously at all. They sit last because they are the newest row, and they
+  // are a count for the same reason `site` is: a plug belongs to a named customer's premises.
+  { id: "plugs", kind: "plugs",                              nm: { cs: "Zásuvky",               en: "Smart plugs" },    ep: { cs: "souhrn, bez identity", en: "aggregate, no identity" } },
 ];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -154,10 +159,63 @@ export async function probeAgents(id = "site") {
   }
 }
 
+/**
+ * The smart-plug aggregate (`w-1567c7`) — a COUNT, like the agents above, and for the same
+ * reason: a plug sits on a named customer's premises.
+ *
+ * 🚨 THIS PROBE DOES NOT JUDGE. The relay answers `/app/availability?summary=1` with four
+ * integers per kind that are ALREADY the verdict — how many plugs were reachable in the last
+ * measured hour, how many were shaky, how many were not, and how many nobody measured. The
+ * thresholds live in the relay's `shared/availstate.mjs` and deliberately never cross into this
+ * repository: a number copied into a second repo with its own suite and its own release is a
+ * number that can quietly come to mean something else, and nothing here would go red when it
+ * did. `shared/discord.mjs` IS copied across, but that is a protocol, which cannot drift in
+ * meaning the way a threshold can.
+ *
+ * 🚨 A plug is on a LAN behind NAT and this runner is on GitHub Actions, so it can never be
+ * probed from here. What is being reported is the site agent's own measurement, relayed — and
+ * that is exactly why `none` matters: see below.
+ *
+ * ⚠️ `none` is NOT `down`, and folding them would publish outages that never happened. A plug
+ * counted `none` was not measured in the last hour — the relay restarted, a deploy happened, an
+ * agent has not reported yet — and "nobody asked" is not "it did not answer". Same rule
+ * `probeAgents` already follows when the relay will not answer at all.
+ * @returns {Promise<Reading & { total?:number, reachable?:number }>}
+ */
+export async function probePlugs(id = "plugs") {
+  const pat = process.env.SW_STATUS_PAT;
+  if (!pat) return { id, state: "none", ms: 0, detail: "no SW_STATUS_PAT configured" };
+  const t0 = Date.now();
+  try {
+    const res = await fetch(`${BASE}/app/availability?summary=1`, {
+      headers: { authorization: `Bearer ${pat}`, "user-agent": "screenwhere-status-probe" },
+      cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS),
+    });
+    const ms = Date.now() - t0;
+    if (!res.ok) return { id, state: "none", ms, detail: `could not ask: HTTP ${res.status}` };
+    const p = (await res.json())?.kinds?.plug;
+    if (!p || typeof p.total !== "number") return { id, state: "none", ms, detail: "could not ask: no plug summary" };
+    const total = p.total, reachable = p.ok || 0;
+    // Measured = everything the relay actually has an answer about. A plug that is only `none`
+    // must not drag the row red, and must not silently count as healthy either: it is simply
+    // outside the denominator, and the detail says how many that was.
+    const measured = total - (p.none || 0);
+    const state = /** @type {State} */ (
+      total === 0 || measured === 0 ? "none"
+        : reachable === measured ? "ok"
+        : reachable === 0 ? "down" : "warn");
+    const unmeasured = (p.none || 0) ? ` (+${p.none} ?)` : "";
+    return { id, state, ms, detail: `${reachable}/${measured}${unmeasured}`, total, reachable };
+  } catch (e) {
+    return { id, state: "none", ms: Date.now() - t0, detail: `could not ask: ${String((e && /** @type {Error} */ (e).message) || e)}` };
+  }
+}
+
 /** One probe, with the single retry that keeps a dropped packet out of the record. */
 async function once(comp) {
   if (comp.kind === "http") return probeHttp(BASE + comp.path, comp.expect, comp.id);
   if (comp.kind === "stun") return probeStun(TURN_HOST, TURN_PORT, comp.id);
+  if (comp.kind === "plugs") return probePlugs(comp.id);
   return probeAgents(comp.id);
 }
 /** @returns {Promise<Reading>} */
