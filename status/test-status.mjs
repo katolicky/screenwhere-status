@@ -244,25 +244,48 @@ const plugSrv = async (kinds) => {
     r.state === "none");
 }
 {
+  // 🚨 The agent row reads the ANONYMISED summary now, not `/app/health` (`w-d433f4`). The old
+  // shape sent named sets belonging to named customers to this runner and discarded the names
+  // here; worse, it was filtered by the caller's rights, so an honest whole-installation count
+  // demanded a SUPERADMIN token in THIS PUBLIC REPOSITORY's Actions secrets. The server below
+  // therefore answers the summary — and deliberately carries a customer name in a field this
+  // probe must not read, so "no name survives" is a real test rather than a tautology.
   const s = await serve((q, r) => {
-    if (q.url !== "/app/health") { r.writeHead(404); return r.end(); }
+    if (!String(q.url).startsWith("/app/availability")) { r.writeHead(404); return r.end(); }
     r.writeHead(200, { "content-type": "application/json" });
-    r.end(JSON.stringify({ ok: true, sets: [
-      { setId: "kancelar-1", name: "Kancelář — velká TV", online: true },
-      { setId: "kancelar-2", name: "Zasedačka", online: false },
-    ] }));
+    r.end(JSON.stringify({ ok: true, ts: Date.now(),
+      kinds: { plug: { total: 0, ok: 0, warn: 0, bad: 0, none: 0 }, box: { total: 2, ok: 2, warn: 0, bad: 0, none: 0 } },
+      live: { box: { total: 2, online: 1 } },
+      notes: "Kancelář — velká TV / Zasedačka" }));
   });
   process.env.SW_STATUS_BASE = s.url;
   process.env.SW_STATUS_PAT = "pat_test";
-  const mod = await import("./probe.mjs?agents");
+  const mod = await import("./probe.mjs?agents" + Math.random());
   const r = await mod.probeAgents();
   ok("agents: one of two reachable is `warn`", r.state === "warn");
   ok("agents: the reading is two integers", r.total === 2 && r.reachable === 1);
-  // 🚨 The privacy invariant. Both the history file and the published JSON are public, so a set
-  // name must not survive the probe — not in a field, not in the detail string.
+  // ⚠️ It must read the LIVE count, not the hour's verdict — the hour says 2 ok above while the
+  // live view says 1 of 2, and "is it up now" is what this row has always asked.
+  ok("agents: it reads the LIVE count, not the hourly verdict", r.detail === "1/2");
+  // 🚨 The privacy invariant. Both the history file and the published JSON are public.
   const blob = JSON.stringify(r);
   ok("agents: NO customer name survives the probe — not in a field, not in `detail`",
     !/kancelar|Kancelář|Zasedačka/.test(blob));
+  s.close();
+}
+{
+  // The two-release window, from this side: a relay too old to serve `?summary=1` answers
+  // something with no `live`, and the row must read "could not ask", never `down`.
+  const s = await serve((q, r) => {
+    r.writeHead(200, { "content-type": "application/json" });
+    r.end(JSON.stringify({ ok: true, sets: [{ setId: "kancelar-1", name: "Kancelář", online: true }] }));
+  });
+  process.env.SW_STATUS_BASE = s.url; process.env.SW_STATUS_PAT = "pat_test";
+  const r = await (await import("./probe.mjs?oldagents" + Math.random())).probeAgents();
+  ok("agents: a relay too old for `?summary=1` reads `could not ask`, never `down`",
+    r.state === "none" && /could not ask/.test(r.detail));
+  ok("agents: …and that old reply's set name does not leak into the reading",
+    !/Kancelář|kancelar-1/.test(JSON.stringify(r)));
   s.close();
 }
 {

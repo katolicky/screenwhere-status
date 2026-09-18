@@ -124,9 +124,19 @@ export function probeStun(host = TURN_HOST, port = TURN_PORT, id = "turn") {
 /**
  * The site-agent aggregate — a COUNT, and deliberately nothing else.
  *
- * /app/health lists named sets belonging to named customers, and that is precisely what a public
- * page must never carry, so the response is reduced here, at the edge, before anything is written
- * down. No name reaches the history file and none reaches the published JSON.
+ * 🚨 IT NO LONGER READS `/app/health` (`w-d433f4`). That endpoint lists NAMED sets belonging to
+ * named customers, and this probe reduced them to a count on the runner — names crossing the wire
+ * and being discarded afterwards. Worse, it is filtered by the caller's rights, so an honest
+ * whole-installation count demanded a SUPERADMIN token in THIS PUBLIC REPOSITORY's Actions
+ * secrets: a set with no teams, or one marked private, is visible to nobody else. The relay now
+ * answers the same question in `/app/availability?summary=1` as `live.box` — two integers, no
+ * identity, unfiltered — so the credential here can be a rights-less one and the count is still
+ * complete. "The names were never here" beats "we removed the names".
+ *
+ * ⚠️ `live.box` and the hourly `kinds.box` are DIFFERENT measurements and this row wants the
+ * first. The hour's verdict is an aggregate: a box that went away two minutes ago still reads
+ * healthy until enough failed samples accumulate, which is the right answer to "what shape has it
+ * been in" and the wrong one to "is it up now" — which is what this row has always said.
  *
  * It is also the only probe with a credential (a PAT in SW_STATUS_PAT). Without one the row says
  * "no data" rather than disappearing: a component that vanishes when it cannot be measured is how
@@ -138,7 +148,7 @@ export async function probeAgents(id = "site") {
   if (!pat) return { id, state: "none", ms: 0, detail: "no SW_STATUS_PAT configured" };
   const t0 = Date.now();
   try {
-    const res = await fetch(`${BASE}/app/health`, {
+    const res = await fetch(`${BASE}/app/availability?summary=1`, {
       headers: { authorization: `Bearer ${pat}`, "user-agent": "screenwhere-status-probe" },
       cache: "no-store", signal: AbortSignal.timeout(TIMEOUT_MS),
     });
@@ -146,12 +156,13 @@ export async function probeAgents(id = "site") {
     // ⚠️ "We could not ask" is NOT "they are down". When the relay is gone the infrastructure rows
     // already say so in red; claiming the agents are down too would be asserting something we did
     // not observe. This is the one place the built page differs from the approved mockup, where
-    // the major-outage state painted this row red.
+    // the major-outage state painted this row red. It also covers the two-release window in which
+    // this page is newer than the relay: an older relay ignores `?summary=1` and answers something
+    // with no `live` in it, which must read "could not ask" and never "down".
     if (!res.ok) return { id, state: "none", ms, detail: `could not ask: HTTP ${res.status}` };
-    const body = await res.json();
-    const sets = Array.isArray(body?.sets) ? body.sets : [];
-    const total = sets.length;
-    const reachable = sets.filter((s) => s && s.online).length;
+    const box = (await res.json())?.live?.box;
+    if (!box || typeof box.total !== "number") return { id, state: "none", ms, detail: "could not ask: no live box count" };
+    const total = box.total, reachable = box.online || 0;
     const state = /** @type {State} */ (total === 0 ? "none" : reachable === total ? "ok" : reachable === 0 ? "down" : "warn");
     return { id, state, ms, detail: `${reachable}/${total}`, total, reachable };
   } catch (e) {
