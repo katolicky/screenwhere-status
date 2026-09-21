@@ -35,10 +35,35 @@ export const CADENCE_MIN = Number(process.env.SW_STATUS_CADENCE_MIN || 5);
 /** A probe detail is our own sentence about our own endpoint, but an exception message can be
  *  arbitrarily long and this one ends up in a file every open tab re-fetches every minute. */
 export const WHY_MAX = 140;
-/** Components whose failure IS our outage. The site aggregate is reported but never drives the
- *  banner: one customer's box being switched off is not a Screenwhere incident, and a page that
- *  cried outage over it would be ignored by the third week. */
-export const INFRA = ["app", "docs", "mcp", "whep", "turn"];
+/**
+ * The five planes we run in the cloud and probe directly from outside. They are named separately
+ * from `INFRA` for ONE reason: `down` — "Rozsáhlý výpadek" — means the whole box stopped
+ * answering, and that sentence can only ever be made about the planes this prober can reach. A
+ * premises row cannot participate in it, because when the relay dies the plug and box rows go
+ * `none` ("could not ask"), not `down`. Folding them in would have turned the one-box failure
+ * into "výpadek části služby" — the total outage reported as a partial one.
+ */
+export const CORE = ["app", "docs", "mcp", "whep", "turn"];
+
+/**
+ * The devices we operate ON SITE, reported to us by the relay as a count and never a name.
+ *
+ * 🚨 THESE COUNT TOWARDS THE BANNER (owner, 2026-09-21), and that REVERSES what stood here.
+ * The old rule kept them out, and its stated reason was *"one customer's box being switched off
+ * is not a Screenwhere incident"* — `probe.mjs` said the same about a plug belonging to "a named
+ * customer's premises". **That premise was never true of this product.** Owner, on being shown
+ * the page: *„nic není u zákazníka! Jsme SaaS!"* Every box and every plug the prober counts is
+ * our own installation, so there is no third party whose switched-off device we are politely
+ * declining to report — there is only our own service, partly down.
+ *
+ * What the owner actually saw is the fault this fixes: the Zásuvky row read `down` while the
+ * headline above it read "Všechny systémy fungují". A banner may not claim more than the thing
+ * it measured, and the sentence it makes a reader believe is about the WHOLE page.
+ */
+export const PREMISES = ["site", "plugs"];
+
+/** Everything the banner answers for, and everything the 90-day figure is made of. */
+export const INFRA = [...CORE, ...PREMISES];
 
 /** UTC, because a prober on somebody else's fleet has no business inheriting its timezone. */
 export const dayKey = (ts) => new Date(ts).toISOString().slice(0, 10);
@@ -187,11 +212,20 @@ export function buildStatus(hist, incidents, now = Date.now()) {
       dayFacts,
     };
   });
+  const core = components.filter((c) => CORE.includes(c.id));
   const infra = components.filter((c) => INFRA.includes(c.id));
-  const overall = infra.every((c) => c.state === "down") && infra.length > 0 ? "down"
+  // 🚨 `down` is asked of CORE and everything else of INFRA, and the asymmetry is the whole
+  // design — see CORE above for why a premises row cannot say "everything is down".
+  //
+  // ⚠️ And `ok` is asked of CORE plus the ABSENCE of trouble anywhere, never of
+  // `infra.every(ok)`. A plug row is `none` for up to an hour after every relay restart, and
+  // `every(ok)` would have dropped the entire banner to "Nevíme, jaký je stav" each time — a
+  // page that goes blank on a routine deploy is one nobody trusts on the day it means it.
+  // `none` here is silence, and silence is neither a claim of health nor an accusation.
+  const overall = core.every((c) => c.state === "down") && core.length > 0 ? "down"
     : infra.some((c) => c.state === "down") ? "partial"
     : infra.some((c) => c.state === "warn") ? "warn"
-    : infra.every((c) => c.state === "ok") ? "ok" : "none";
+    : core.every((c) => c.state === "ok") ? "ok" : "none";
   const infraCounts = keys.flatMap((k) => INFRA.map((id) => hist.days[k]?.[id]));
   const overallPct = displayPct(uptimePct(infraCounts), anyDown(infraCounts));
   const cutoff = now - WINDOW_DAYS * 86_400_000;

@@ -109,7 +109,11 @@ export const STR = {
     resolved: "Vyřešeno", ongoing: "Probíhá",
     tOk: "Všechny systémy fungují", tWarn: "Zhoršený provoz", tPartial: "Výpadek části služby",
     tDown: "Rozsáhlý výpadek", tStale: "Nevíme, jaký je stav",
-    xOk: (p, n = 90) => (p == null ? "Sledujeme pět rovin služby."
+    // ⚠️ "pět rovin" until 2026-09-21, when the banner started answering for seven. A count
+    // written into a sentence is a fact about the code that no test was ever going to hold to
+    // it — the list grew twice before anybody noticed this line had not. It says no number now,
+    // so it cannot go stale again.
+    xOk: (p, n = 90) => (p == null ? "Sledujeme všechny roviny služby."
       : n >= 90 ? `Za posledních 90 dní jsme byli dostupní ${pct(p, "cs")} času.`
       : `Za ${dayCountCs(n)} se záznamem jsme byli dostupní ${pct(p, "cs")} času.`),
     xWarn: (a, u) => `Zhoršeně odpovídá: ${a}.` + (u ? ` Ostatní roviny to neovlivňuje (${u}).` : ""),
@@ -140,7 +144,8 @@ export const STR = {
     resolved: "Resolved", ongoing: "Ongoing",
     tOk: "All systems operational", tWarn: "Degraded performance", tPartial: "Partial outage",
     tDown: "Major outage", tStale: "We do not know the current state",
-    xOk: (p, n = 90) => (p == null ? "We watch five planes of the service."
+    // See the Czech note above — a hard-coded plane count that nothing could keep honest.
+    xOk: (p, n = 90) => (p == null ? "We watch every plane of the service."
       : n >= 90 ? `We were available ${pct(p, "en")} of the time over the last 90 days.`
       : `We were available ${pct(p, "en")} of the time over the ${dayCountEn(n)} we have on record.`),
     xWarn: (a, u) => `Responding slowly: ${a}.` + (u ? ` Other planes are unaffected (${u}).` : ""),

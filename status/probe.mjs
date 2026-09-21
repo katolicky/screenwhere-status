@@ -48,11 +48,23 @@ export const COMPONENTS = [
   { id: "mcp",  kind: "http", path: "/mcp",   expect: [405], nm: { cs: "MCP server",            en: "MCP server" },     ep: "/mcp" },
   { id: "whep", kind: "http", path: "/whep",  expect: [200], nm: { cs: "Video (WHEP)",          en: "Video (WHEP)" },   ep: "/whep" },
   { id: "turn", kind: "stun",                                nm: { cs: "TURN relay (coturn)",   en: "TURN relay (coturn)" }, ep: "udp/3478 · STUN" },
-  { id: "site", kind: "agents",                              nm: { cs: "Zařízení na místě",     en: "Site agents" },    ep: { cs: "souhrn, bez identity", en: "aggregate, no identity" } },
+  // ⚠️ The label names the PROPERTY, not the box (owner, 2026-09-21). It read "Zařízení na
+  // místě" / "Site agents", which a reader takes to cover everything in the room — televisions
+  // included — while what is actually measured is one thing: does the unit at the site hold a
+  // live link to the relay. A television can be switched off with this row green. And the public
+  // page deliberately says nothing about what the unit IS: the owner will not advertise the
+  // hardware, any more than the count (`w-99ae61`).
+  { id: "site", kind: "agents",                              nm: { cs: "Připojení lokalit",     en: "Site connectivity" }, ep: { cs: "souhrn, bez identity", en: "aggregate, no identity" } },
   // `w-1567c7`. Plugs are the EMERGENCY path — a hard power-cycle of the wall socket is the last
   // lever the product has when a television or an agent wedges — and until 2026-09-18 nothing
-  // measured them continuously at all. They sit last because they are the newest row, and they
-  // are a count for the same reason `site` is: a plug belongs to a named customer's premises.
+  // measured them continuously at all. They sit last because they are the newest row.
+  //
+  // ⚠️ They are a count for the same reason `site` is, but NOT for the reason this comment used
+  // to give. It said "a plug belongs to a named customer's premises"; there are no customer
+  // premises (owner, 2026-09-21: *„nic není u zákazníka! Jsme SaaS!"*). The count is here
+  // because the owner will not publish how many devices the installation has (`w-99ae61`) —
+  // an identity-free aggregate, not somebody else's property. Since 2026-09-21 both aggregate
+  // rows DO drive the banner; see `PREMISES` in history.mjs.
   { id: "plugs", kind: "plugs",                              nm: { cs: "Zásuvky",               en: "Smart plugs" },    ep: { cs: "souhrn, bez identity", en: "aggregate, no identity" } },
 ];
 
@@ -125,7 +137,7 @@ export function probeStun(host = TURN_HOST, port = TURN_PORT, id = "turn") {
  * The site-agent aggregate — a COUNT, and deliberately nothing else.
  *
  * 🚨 IT NO LONGER READS `/app/health` (`w-d433f4`). That endpoint lists NAMED sets belonging to
- * named customers, and this probe reduced them to a count on the runner — names crossing the wire
+ * named sites, and this probe reduced them to a count on the runner — names crossing the wire
  * and being discarded afterwards. Worse, it is filtered by the caller's rights, so an honest
  * whole-installation count demanded a SUPERADMIN token in THIS PUBLIC REPOSITORY's Actions
  * secrets: a set with no teams, or one marked private, is visible to nobody else. The relay now
@@ -149,8 +161,10 @@ export async function probeAgents(id = "site") {
 }
 
 /**
- * The smart-plug aggregate (`w-1567c7`) — a COUNT, like the agents above, and for the same
- * reason: a plug sits on a named customer's premises.
+ * The smart-plug aggregate (`w-1567c7`) — a COUNT, like the site row above, and for the same
+ * reason: the owner does not publish how many devices the installation has (`w-99ae61`). NOT
+ * because the plug belongs to somebody else — it does not; this is a SaaS and every plug counted
+ * here is ours (owner, 2026-09-21).
  *
  * 🚨 THIS PROBE DOES NOT JUDGE. The relay answers `/app/availability?summary=1` with four
  * integers per kind that are ALREADY the verdict — how many plugs were reachable in the last

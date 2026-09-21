@@ -20,7 +20,7 @@ process.env.SW_STATUS_TIMEOUT_MS = "1500";
 process.env.SW_STATUS_SLOW_MS = "300";
 
 const { probeHttp, probeStun, probeAgents, COMPONENTS } = await import("./probe.mjs");
-const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, hhmm, INFRA, WINDOW_DAYS, WHY_MAX, CADENCE_MIN } = await import("./history.mjs");
+const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, hhmm, INFRA, CORE, PREMISES, WINDOW_DAYS, WHY_MAX, CADENCE_MIN } = await import("./history.mjs");
 const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR, dayTip, daysOnRecord } = await import("./i18n.js");
 const { decide, emptyAlert, view, send, downIds, mentionFor, STREAK } = await import("./alert.mjs");
 
@@ -250,31 +250,67 @@ const T0 = Date.parse("2026-08-10T12:00:00Z");
   let h = emptyHistory();
   h = appendReading(h, reading(T0, { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "down" }));
   const s = buildStatus(h, [], T0);
-  // A customer's television being switched off is not a Screenwhere incident. If it turned the
-  // banner red the page would be crying wolf by the third week and nobody would read it again.
-  ok("published: a site agent being offline does NOT make the banner red", s.overall === "ok");
+  // 🚨 THIS ASSERTION IS THE REVERSE OF WHAT IT SAID (owner, 2026-09-21). It used to read
+  // "a site agent being offline does NOT make the banner red", on the stated grounds that a
+  // customer's switched-off device is not our incident. There are no customers' devices — it is
+  // a SaaS and every site counted here is ours — so the reason was false and the behaviour it
+  // protected was the fault the owner reported: a red row under "Všechny systémy fungují".
+  ok("published: a site being disconnected DOES move the banner off `ok`", s.overall === "partial");
   ok("published: …and the site row still reports its own state honestly",
     s.components.find((c) => c.id === "site").state === "down");
-  ok("published: the banner only ever answers to INFRA", INFRA.includes("site") === false);
+  ok("published: the banner answers for the premises rows too", INFRA.includes("site") && INFRA.includes("plugs"));
+  // The sentence the banner makes a reader believe is about the WHOLE page, so a row it does not
+  // speak for may not sit under it. Asserted as a SET relation rather than a length: a new
+  // component added to COMPONENTS and forgotten here is exactly how this fault happened.
+  ok("published: every published row is one the banner speaks for",
+    s.components.every((c) => INFRA.includes(c.id)));
+}
+{
+  // 🚨 The trap the naive version of this change falls into. When the relay is gone the premises
+  // rows cannot say `down` — nobody could ask, so they say `none` — and a banner that demanded
+  // `every(down)` across all seven would have downgraded the total outage to "výpadek části
+  // služby". `down` is therefore asked of CORE alone.
+  let h = emptyHistory();
+  h = appendReading(h, reading(T0, { app: "down", docs: "down", mcp: "down", whep: "down", turn: "down", site: "none", plugs: "none" }));
+  ok("published: the box being gone is still a MAJOR outage, even though the premises rows say `none`",
+    buildStatus(h, [], T0).overall === "down");
+}
+{
+  // ⚠️ And the mirror of it: an unmeasured plug row is silence, not a verdict. The relay restarts
+  // and the last measured hour goes `none` for up to an hour; if that dropped the banner to
+  // "Nevíme, jaký je stav", the page would go blank on every routine deploy.
+  let h = emptyHistory();
+  h = appendReading(h, reading(T0, { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "none" }));
+  ok("published: a premises row nobody measured does not blank the banner", buildStatus(h, [], T0).overall === "ok");
+}
+{
+  // The owner's own report, reproduced from the live document of 2026-09-21: five green planes,
+  // the site row green, and one failing plug.
+  let h = emptyHistory();
+  h = appendReading(h, reading(T0, { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "down" }));
+  const s = buildStatus(h, [], T0);
+  ok("published: 🚨 the reported fault — a plug outage can no longer sit under `ok`", s.overall === "partial");
+  ok("published: …and the banner names the plugs as what is affected",
+    s.affected.some((n) => n.cs === "Zásuvky") && !s.unaffected.some((n) => n.cs === "Zásuvky"));
 }
 {
   let h = emptyHistory();
-  h = appendReading(h, reading(T0, { app: "down", docs: "down", mcp: "down", whep: "down", turn: "down", site: "none" }));
+  h = appendReading(h, reading(T0, { app: "down", docs: "down", mcp: "down", whep: "down", turn: "down", site: "none", plugs: "none" }));
   const s = buildStatus(h, [], T0);
   ok("published: every plane down is `down` — the one-box failure", s.overall === "down");
 }
 {
   let h = emptyHistory();
-  h = appendReading(h, reading(T0, { app: "ok", docs: "ok", mcp: "ok", whep: "down", turn: "ok", site: "ok" }));
+  h = appendReading(h, reading(T0, { app: "ok", docs: "ok", mcp: "ok", whep: "down", turn: "ok", site: "ok", plugs: "ok" }));
   const s = buildStatus(h, [], T0);
   ok("published: one plane down is `partial`, not a major outage", s.overall === "partial");
   // The banner has to be able to say what still works — "video is down, control is not" is the
   // sentence that stops a degraded plane from reading as a dead product.
-  ok("published: it names what is affected AND what is not", s.affected.length === 1 && s.unaffected.length === 4);
+  ok("published: it names what is affected AND what is not", s.affected.length === 1 && s.unaffected.length === 6);
 }
 {
   let h = emptyHistory();
-  h = appendReading(h, reading(T0, { app: "warn", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok" }));
+  h = appendReading(h, reading(T0, { app: "warn", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "ok" }));
   ok("published: a slow plane is `warn`", buildStatus(h, [], T0).overall === "warn");
 }
 {
@@ -365,7 +401,7 @@ const T0 = Date.parse("2026-08-10T12:00:00Z");
   ok("window en: …in both languages",
     STR.en.window(90) === "last 90 days" && /last 90 days/.test(STR.en.xOk(99.98, 90)));
   ok("window: with no percentage there is no claim to qualify",
-    STR.cs.xOk(null, 5) === "Sledujeme pět rovin služby.");
+    STR.cs.xOk(null, 5) === "Sledujeme všechny roviny služby.");
 }
 {
   // 🚨 The page must ASK THE DOCUMENT, and this is where the first version of this guard was
@@ -633,8 +669,8 @@ ok("theme: the sun/moon swap covers the unset case, not just the two explicit on
   const A0 = Date.parse("2026-08-11T09:00:00Z");
   const t = (n) => A0 + n * 300_000;                       // ticks, five minutes apart
   const good = (n) => reading(t(n), { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok" });
-  const bad  = (n, ids = INFRA) => reading(t(n), Object.fromEntries(
-    [...INFRA.map((id) => [id, ids.includes(id) ? "down" : "ok"]), ["site", "ok"]]));
+  const bad  = (n, ids = CORE) => reading(t(n), Object.fromEntries(
+    [...CORE.map((id) => [id, ids.includes(id) ? "down" : "ok"]), ["site", "ok"], ["plugs", "ok"]]));
   /** Feed a sequence and collect what would have been sent. */
   const feed = (list) => {
     let a = emptyAlert(); const evs = [];
@@ -658,15 +694,20 @@ ok("theme: the sun/moon swap covers the unset case, not just the two explicit on
   ok("alert: bad, good, bad, good is a flap and not an outage",
     feed([bad(0), good(1), bad(2), good(3)]).evs.length === 0);
   ok("alert: `warn` is slow, not absent — a degraded plane wakes nobody",
-    feed([reading(t(0), { app: "warn", docs: "warn", mcp: "warn", whep: "warn", turn: "warn", site: "ok" }),
-          reading(t(1), { app: "warn", docs: "warn", mcp: "warn", whep: "warn", turn: "warn", site: "ok" })]).evs.length === 0);
-  // 🚨 One customer's box being switched off is not a Screenwhere incident. The page already
-  // refuses to let the site row paint the banner; an alert that pinged for it would be muted
-  // within weeks, and then the real outage would ping a channel nobody reads.
-  ok("alert: the site-agent row NEVER fires — not once, not ever",
-    feed([reading(t(0), { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "down" }),
-          reading(t(1), { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "down" }),
-          reading(t(2), { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "down" })]).evs.length === 0);
+    feed([reading(t(0), { app: "warn", docs: "warn", mcp: "warn", whep: "warn", turn: "warn", site: "ok", plugs: "ok" }),
+          reading(t(1), { app: "warn", docs: "warn", mcp: "warn", whep: "warn", turn: "warn", site: "ok", plugs: "ok" })]).evs.length === 0);
+  // 🚨 THE PREMISES ROWS NEVER FIRE FROM HERE — and since 2026-09-21 that is no longer the same
+  // statement as "they do not paint the banner". They DO paint it now; what they must not do is
+  // send a second Discord message for an event the relay already reports through the owner's own
+  // channels (audit, app feed, operator webhook, mail — `w-0f0d30`, v1.313.0). So this asserts
+  // the SENDER's scope, and it is deliberately asserted about both rows: `plugs` was added to
+  // INFRA in the same change that wrote this, and reading `INFRA` here would have silently
+  // enrolled it.
+  for (const row of ["site", "plugs"]) {
+    const st = (v) => ({ app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "ok", [row]: v });
+    ok(`alert: the ${row} row NEVER fires — not once, not ever`,
+      feed([reading(t(0), st("down")), reading(t(1), st("down")), reading(t(2), st("down"))]).evs.length === 0);
+  }
   ok("alert: one component down is enough — a dead /mcp is an outage of /mcp",
     feed([good(0), bad(1, ["mcp"]), bad(2, ["mcp"])]).evs.length === 1);
   // 🚨 The store is written by appendReading, which names every field it keeps — so an alert
@@ -690,7 +731,7 @@ ok("theme: the sun/moon swap covers the unset case, not just the two explicit on
     // An outage that starts at one component and swallows the box a tick later was about both.
     const { evs } = feed([good(0), bad(1, ["mcp"]), bad(2, ["mcp"]), bad(3), good(4), good(5)]);
     ok("alert: the recovery names everything the outage touched, not just what was down last",
-      evs[1].ids.length === INFRA.length && evs[1].ids.includes("mcp"));
+      evs[1].ids.length === CORE.length && evs[1].ids.includes("mcp"));
   }
 
   // The message itself. 🚨 RENDERED at 1, 2 and 5 — not read. Four counts-next-to-a-Czech-noun
@@ -706,7 +747,7 @@ ok("theme: the sun/moon swap covers the unset case, not just the two explicit on
     const v = view({ kind: "down", at: t(2), since: t(1), ended: 0, ids: ["mcp"], minutes: 0 });
     ok("alert: the message names the component in the language the reader reads",
       v.fields.some((f) => f.value === "MCP server") && v.tone === "bad");
-    const all = view({ kind: "down", at: t(2), since: t(1), ended: 0, ids: INFRA.slice(), minutes: 0 });
+    const all = view({ kind: "down", at: t(2), since: t(1), ended: 0, ids: CORE.slice(), minutes: 0 });
     ok("alert: everything down reads as the box, not as a list of five coincidences",
       /nic/.test(all.text) && !/Ostatní/.test(all.text));
     ok("alert: a partial outage says what is still up, so it does not read as a dead product",
@@ -720,7 +761,7 @@ ok("theme: the sun/moon swap covers the unset case, not just the two explicit on
     const t = (kind, ids) => view({ kind, at: t0v, since: t0v, ended: t0v, ids, minutes: 3 }).title;
     const t0v = Date.parse("2026-08-11T13:39:00Z");
     ok("alert: everything down keeps the plain title — that IS the whole-machine case",
-      t("down", INFRA.slice()) === "Výpadek infrastruktury", t("down", INFRA.slice()));
+      t("down", CORE.slice()) === "Výpadek infrastruktury", t("down", CORE.slice()));
     ok("alert: one part down says so, and names it, in the title",
       t("down", ["mcp"]) === "Částečný výpadek — MCP server", t("down", ["mcp"]));
     // 🚨 Rendered at 2 and 5, not read. The names are too long to list in a title, so it counts —
@@ -731,7 +772,7 @@ ok("theme: the sun/moon swap covers the unset case, not just the two explicit on
     ok("alert: …and four, which is genuinely partial, declines correctly",
       t("down", ["app", "docs", "mcp", "whep"]) === "Částečný výpadek — 4 části", t("down", ["app", "docs", "mcp", "whep"]));
     ok("alert: the recovery title takes the same shape, so the pair reads as one story",
-      t("up", ["mcp"]) === "Obnoveno — MCP server" && t("up", INFRA.slice()) === "Obnoveno");
+      t("up", ["mcp"]) === "Obnoveno — MCP server" && t("up", CORE.slice()) === "Obnoveno");
     // ⚠️ The recovery text branches for the same reason the outage text does. It used not to,
     // and after a partial outage it announced that ALL parts were answering "again" — when four
     // of the five had never stopped.

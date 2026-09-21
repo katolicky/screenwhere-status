@@ -7,12 +7,19 @@
 // is down. This sender runs on GitHub Actions beside the prober, off our infrastructure, and
 // therefore survives the failure it is describing.
 //
-// ⚠️ THE SITE-AGENT ROW NEVER FIRES ANYTHING. `INFRA` is imported from history.mjs rather than
-// re-listed here, and that is deliberate: the page already refuses to let one customer's box
-// being switched off paint the banner, and an alert that pinged a channel for it would be muted
-// by the third week. One rule, one list.
+// ⚠️ THE PREMISES ROWS NEVER FIRE ANYTHING — this sender is about the five cloud planes and
+// nothing else. `CORE` is imported from history.mjs rather than re-listed here, so the list
+// cannot drift; the import is deliberately NOT `INFRA`, which since 2026-09-21 also holds the
+// box and plug aggregates (see `PREMISES` there).
+//
+// 🚨 That distinction is not a leftover of the old "it's the customer's device" reasoning, which
+// was false and is gone. It is that a plug or a box going down ALREADY alerts, from the relay,
+// down the channels the owner chose for it — audit row, app feed, operator webhook and mail
+// (`w-0f0d30`, v1.313.0). Firing a second Discord message from here would double every one of
+// them, and a channel that says everything twice is one people stop reading. This sender exists
+// for the one event the relay CANNOT report: itself going away.
 import { COMPONENTS } from "./probe.mjs";
-import { INFRA } from "./history.mjs";
+import { CORE } from "./history.mjs";
 import { discordBody, isDiscordWebhook } from "../shared/discord.mjs";
 import { czPlural, durCs } from "./i18n.js";
 
@@ -67,7 +74,7 @@ const at = (ts, now) => {
 
 /** Infrastructure components confirmed down in this reading. `warn` is slow, not absent. */
 export const downIds = (reading) =>
-  INFRA.filter((id) => reading?.states?.[id] === "down");
+  CORE.filter((id) => reading?.states?.[id] === "down");
 
 /**
  * Fold one reading into the alert state, and say whether that crosses a line.
@@ -128,14 +135,14 @@ export function decide(prev, reading, streak = STREAK) {
  * API") and three of them do not fit anywhere a title is read at a glance.
  */
 const partOf = (ids) => (ids.length === 1 ? nameOf(ids[0]) : czPlural(ids.length, "část", "části", "částí"));
-const isTotal = (ids) => ids.length >= INFRA.length;
+const isTotal = (ids) => ids.length >= CORE.length;
 
 export function view(ev) {
   const names = ev.ids.map(nameOf).join(", ");
   if (ev.kind === "down") {
     return {
       title: isTotal(ev.ids) ? "Výpadek infrastruktury" : `Částečný výpadek — ${partOf(ev.ids)}`,
-      text: "Sonda mimo naši infrastrukturu nedostala odpověď. " + (ev.ids.length === INFRA.length
+      text: "Sonda mimo naši infrastrukturu nedostala odpověď. " + (ev.ids.length === CORE.length
         ? "Neodpovídá **nic** — vypadá to na celý stroj, síť nebo doménu."
         : "Ostatní části zatím odpovídají."),
       tone: /** @type {"bad"} */ ("bad"),

@@ -15,7 +15,7 @@ already has a `stats.json` meaning *usage*.
 
 | File | What it is |
 |---|---|
-| `probe.mjs` | The five probes + the site-agent aggregate. Pure functions; nothing writes. |
+| `probe.mjs` | The five cloud probes + the two on-site aggregates (sites, plugs). Pure functions; nothing writes. |
 | `history.mjs` | The store and the shape the page reads. Pure; the suite runs it without a file. |
 | `alert.mjs` | Who gets told, and when. Pure decision + the sender; § Alerting below. |
 | `run.mjs` | One tick: probe → fold → alert → write `public/`. What the workflow calls. |
@@ -158,13 +158,23 @@ layout, and fades in already in the right place.
   "we do not know", the badges fall back to *no data*, and today's bar goes grey.
   A file cannot know it has gone out of date — only the page can.
 - **Grey means unknown, never fine.** It is labelled that way in the legend on purpose.
-- **It never carries a customer's name.** `/app/health` lists named sets at named sites;
+- **It never carries a set's name.** `/app/health` lists named sets at named sites;
   `probeAgents` reduces that to two integers at the edge, before anything is written down,
   because both the history file and the published JSON are public.
 - **One failed request is not an outage.** Every failing probe is retried once; only the
   confirmed failure is recorded.
-- **A site agent being offline does not turn the banner red.** One customer's box being
-  switched off is not a Screenwhere incident. Only `INFRA` drives the overall state.
+- **The banner may not claim more than the page shows.** Every published row drives the overall
+  state — the five cloud planes (`CORE`) plus the two on-site aggregates (`PREMISES`), together
+  `INFRA`. 🚨 **This reverses what stood here until 2026-09-21**, when the owner found the Zásuvky
+  row reading `down` under a headline saying "Všechny systémy fungují". The old rule kept the
+  premises rows out, and its reason — *"one customer's box being switched off is not a
+  Screenwhere incident"* — was never true of this product: *„nic není u zákazníka! Jsme SaaS!"*
+  Every box and plug counted here is our own installation.
+- ⚠️ **But `down` — "Rozsáhlý výpadek" — is still asked of `CORE` alone**, and that asymmetry is
+  load-bearing rather than an oversight. When the relay is gone the premises rows report `none`
+  ("could not ask"), never `down`, so a banner demanding all seven `down` would have reported the
+  total outage as a partial one. By the same token an unmeasured premises row does not blank the
+  banner: `none` is silence, which is neither a claim of health nor an accusation.
 
 ## Light and dark
 
@@ -293,7 +303,12 @@ sends that one. Reasoning: `docs/STATUS-PAGE-PLAN.md` § 8.
 **The rule.** Two consecutive ticks with at least one infrastructure component `down` → one
 message. Two consecutive clean ticks → one recovery message with how long it lasted. Nothing else
 sends anything: no message per tick while it is down, none for a `warn` (slow is not absent), and
-**none ever for the site-agent row** — one customer's box being switched off is not our incident.
+**none ever for the premises rows** (`site`, `plugs`). ⚠️ Since 2026-09-21 that is no longer the
+same statement as "they do not paint the banner" — they do. The sender is scoped to `CORE`
+because a box or plug going down is ALREADY reported by the relay, through the channels the owner
+chose for it: an audit row, an event in the app feed, the operator webhook and mail (`w-0f0d30`,
+v1.313.0). A second Discord message would double every one of them, and a channel that says
+everything twice is one people stop reading.
 
 **Setup — one secret, and it is the owner's for the same reason the Cloudflare ones are:**
 
