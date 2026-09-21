@@ -303,7 +303,7 @@
 <script type="module">
 // The strings and every count-next-to-a-noun rule live in i18n.js so the suite can render them
 // at 1, 2 and 5 rather than read them. Czech agreement is the fault this project ships most.
-import { STR, pct, dayTip, daysOnRecord } from './i18n.js';
+import { STR, pct, dayTip, daysOnRecord, incidentEntries } from './i18n.js';
 
 // ── language ──────────────────────────────────────────────────────────────────
 // Public page, so the first guess comes from the browser rather than from us; the choice is
@@ -526,15 +526,49 @@ document.addEventListener('keydown', (e) => { if (e.key === 'Escape') hideTip();
 addEventListener('scroll', hideTip, { passive: true });
 addEventListener('resize', hideTip);
 
+/**
+ * The outages the record holds, rendered into the same shape as a hand-written one.
+ *
+ * ⚠️ The sentence is made HERE, not in the document: `deriveIncidents` emits the component, the
+ * span and the counts precisely so a Czech verb never has to agree with a component name inside
+ * a data file (`incTitle` is a noun phrase for that reason).
+ */
+/** One derived entry, given the sentence it could not carry as data. */
+function derivedAsIncident(d){
+  const t = T();
+  const days = [{ at: t.incFrom, label: L(d.nm), text: t.incApprox(dur(d.minutes)) }];
+  if (d.why) days.push({ at: t.incDay, label: t.incDerived, text: d.why });
+  return {
+    // The span, not a single date: three red days in a row are one outage and must read as one.
+    spanText: d.from === d.to ? t.incSpanOne(fmtDay(d.from)) : t.incSpan(fmtDay(d.from), fmtDay(d.to)),
+    minutes: d.minutes,
+    resolved: !d.ongoing,
+    title: t.incTitle(L(d.nm)),
+    timeline: days,
+  };
+}
+
+/** A `YYYY-MM-DD` day key in the reader's language. The key is UTC and published, never rederived
+ *  from the reader's clock — the fault `w-f40827` fixed for the bar labels. */
+function fmtDay(key){
+  const [y, m, d] = key.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d)).toLocaleDateString(lang === 'cs' ? 'cs-CZ' : 'en-GB',
+    { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
 function renderIncidents(){
   const t = T();
-  const list = (data && data.incidents) || [];
+  // 🚨 BOTH, and neither stands in for the other (`w-14c275`). The hand-written file is the
+  // analysis a probe cannot produce; the derived entries are the outages that actually happened.
+  // This section used to show only the former, and so announced "no incidents" through an outage.
+  const list = incidentEntries(data).map((e) => (e.kind === "derived" ? derivedAsIncident(e.d) : e.n));
   // The empty list is a real screen, not a fallback: it is what a healthy product shows for most
-  // of the year, so it says "nothing happened" rather than "no records".
-  if (!list.length) { $('#incidents').innerHTML = `<div class="empty">${esc(t.noIncidents)}</div>`; return; }
+  // of the year. ⚠️ It now says what it KNOWS — no outage in the record — and names how much
+  // record that is, instead of claiming ninety days it never measured.
+  if (!list.length) { $('#incidents').innerHTML = `<div class="empty">${esc(t.noIncidents(daysOnRecord(data)))}</div>`; return; }
   $('#incidents').innerHTML = list.map((n) => {
     const d = n.minutes ? ' · ' + dur(n.minutes) : '';
-    const date = n.at ? new Date(n.at).toLocaleDateString(lang === 'cs' ? 'cs-CZ' : 'en-GB', { day:'numeric', month:'long', year:'numeric' }) : '';
+    const date = n.spanText || (n.at ? new Date(n.at).toLocaleDateString(lang === 'cs' ? 'cs-CZ' : 'en-GB', { day:'numeric', month:'long', year:'numeric' }) : '');
     return `<div class="inc">
       <div class="inchd">
         <span class="t">${esc(L(n.title))}</span>

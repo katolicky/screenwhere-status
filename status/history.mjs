@@ -180,6 +180,69 @@ export function windowKeys(now, days = WINDOW_DAYS) {
 }
 
 /**
+ * The outages the RECORD itself contains (`w-14c275`) — derived, never written by hand.
+ *
+ * 🚨 WHY THIS EXISTS. The Incidenty section read `incidents.json`, a hand-written file holding
+ * `[]`, and printed "Za posledních 90 dní jsme nezaznamenali žádný incident." over a plug outage
+ * that was happening as the owner read it (2026-09-21). The sentence did not measure what had
+ * happened; it measured whether somebody had got round to writing it up — and nobody ever had.
+ * index.html even stated the swap as an intention ("it says «nothing happened» rather than «no
+ * records»"), which holds only while the file is maintained. It is the same fault as the banner
+ * above it in `w-df5d2a`: a claim wider than the thing it measured.
+ *
+ * ⚠️ `none` MUST NOT PRODUCE AN INCIDENT, and that is the whole reason this walks `dayState`
+ * rather than the raw counters. A day nobody measured is grey, not red — "we could not ask" is
+ * not "it did not answer", the rule this file keeps everywhere else. Inventing an outage out of
+ * silence is worse than the bug being fixed, because it cannot be checked against anything.
+ *
+ * ⚠️ And this stays LANGUAGE-NEUTRAL. It emits the component, the span and the counts; the page
+ * makes the sentence, exactly as it already does for the day tooltips. A Czech verb agreeing
+ * with a component name ("Zásuvky neodpovídaly" / "MCP server neodpovídal") is not something to
+ * assemble in a data file.
+ *
+ * Runs are maximal and contiguous: three red days in a row are ONE outage, not three, because
+ * that is what a person reading the section is counting.
+ * @param {{id:string,nm:any,state:State,days:(State|"nodata")[],dayFacts:Record<string,any>}[]} components
+ * @param {string[]} keys the window's day keys, oldest first — `days` is parallel to it
+ */
+export function deriveIncidents(components, keys) {
+  const out = [];
+  for (const c of components) {
+    if (!INFRA.includes(c.id)) continue;
+    let i = 0;
+    while (i < c.days.length) {
+      if (c.days[i] !== "down") { i++; continue; }
+      let j = i;
+      while (j + 1 < c.days.length && c.days[j + 1] === "down") j++;
+      const span = keys.slice(i, j + 1);
+      let down = 0, why = "";
+      for (const k of span) {
+        const f = c.dayFacts[k];
+        if (!f) continue;
+        down += f.down || 0;
+        // The FIRST explanation of the outage, not the last: it is the one that says how it
+        // began, and `appendReading` has already made a `down` reason outrank a `warn` one.
+        if (!why && f.why) why = f.why;
+      }
+      out.push({
+        id: c.id, nm: c.nm,
+        from: span[0], to: span[span.length - 1],
+        // ⚠️ Sample-derived and therefore APPROXIMATE — n windows of the probe cadence, not a
+        // stopwatch. The page says "přibližně" for the same reason the day tooltip does.
+        minutes: down * CADENCE_MIN,
+        // Open only if this run reaches the newest column AND the component is still failing.
+        // A red day that has ended is over even if it is today.
+        ongoing: j === c.days.length - 1 && c.state === "down",
+        ...(why ? { why } : {}),
+      });
+      i = j + 1;
+    }
+  }
+  // Newest first, like the hand-written list the page merges these with.
+  return out.sort((a, b) => (a.from < b.from ? 1 : a.from > b.from ? -1 : 0));
+}
+
+/**
  * The published document. Everything the page needs and nothing it does not — note that the
  * page is NOT told whether it is stale: it is given `generatedAt` and works that out itself,
  * because staleness is a fact about the moment somebody opens the page, not about the moment
@@ -256,6 +319,9 @@ export function buildStatus(hist, incidents, now = Date.now()) {
     unaffected: components.filter((c) => INFRA.includes(c.id) && c.state === "ok").map((c) => c.nm),
     components,
     incidents: (incidents || []).filter((n) => !n.at || Date.parse(n.at) >= cutoff),
+    // The outages the record itself holds. `incidents` above stays what a person WROTE — the
+    // analysis a probe cannot produce — and the page shows both. Neither stands in for the other.
+    derived: deriveIncidents(components, keys),
   };
 }
 

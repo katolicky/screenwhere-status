@@ -20,8 +20,8 @@ process.env.SW_STATUS_TIMEOUT_MS = "1500";
 process.env.SW_STATUS_SLOW_MS = "300";
 
 const { probeHttp, probeStun, probeAgents, COMPONENTS } = await import("./probe.mjs");
-const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, hhmm, INFRA, CORE, PREMISES, WINDOW_DAYS, WHY_MAX, CADENCE_MIN } = await import("./history.mjs");
-const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR, dayTip, daysOnRecord } = await import("./i18n.js");
+const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, hhmm, INFRA, CORE, PREMISES, deriveIncidents, WINDOW_DAYS, WHY_MAX, CADENCE_MIN } = await import("./history.mjs");
+const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR, dayTip, daysOnRecord, incidentEntries } = await import("./i18n.js");
 const { decide, emptyAlert, view, send, downIds, mentionFor, STREAK } = await import("./alert.mjs");
 
 let pass = 0, fail = 0;
@@ -912,6 +912,127 @@ ok("harness: ./test.sh globs status/test-*.mjs", /status\/test-\*\.mjs/.test(sh)
 const tscfg = JSON.parse(readFileSync(join(HERE, "..", "tsconfig.json"), "utf8"));
 ok("harness: tsconfig includes status/, or its @ts-check headers check nothing",
   tscfg.include.some((p) => p.startsWith("status/")));
+
+
+// ── incidents come out of the record, not out of a file somebody remembered to edit (w-14c275) ──
+{
+  // 🚨 THE REPORTED FAULT, reproduced. The section printed "Za posledních 90 dní jsme
+  // nezaznamenali žádný incident." while a plug outage was in progress, because it described
+  // `incidents.json` — hand-written, holding `[]` — rather than the record. Same shape as the
+  // banner fault one section up: a claim wider than the thing it measured.
+  const D = 4 * 86_400_000;
+  let h = emptyHistory();
+  for (let i = 0; i < 6; i++) h = appendReading(h, reading(T0 - D + i * 300_000, { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "down" }));
+  h = appendReading(h, reading(T0, { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "down" }));
+  const s = buildStatus(h, [], T0);
+  ok("incidents: 🚨 an outage in the record produces an entry with NO hand-written file at all",
+    s.incidents.length === 0 && s.derived.length > 0);
+  ok("incidents: …and it names the component that failed",
+    s.derived.every((d) => d.id === "plugs"));
+  ok("incidents: …and the one that is still failing is open, not filed as resolved",
+    s.derived.some((d) => d.ongoing === true));
+}
+{
+  // Three red days in a row are ONE outage. A person reading the section counts outages, not
+  // calendar days, and three entries for one fault is the same page crying wolf by another route.
+  let h = emptyHistory();
+  for (let d = 0; d < 3; d++)
+    for (let i = 0; i < 4; i++)
+      h = appendReading(h, reading(T0 - (2 - d) * 86_400_000 + i * 300_000,
+        { app: "ok", docs: "ok", mcp: "down", whep: "ok", turn: "ok", site: "ok", plugs: "ok" }));
+  const s = buildStatus(h, [], T0);
+  ok("incidents: three consecutive red days are ONE outage, not three", s.derived.length === 1);
+  ok("incidents: …and it spans them", s.derived[0].from < s.derived[0].to);
+  // 12 down samples at the published cadence. Approximate and labelled as such on the page — the
+  // probe measures windows, not a stopwatch.
+  ok("incidents: the length is sample-derived, at the published cadence",
+    s.derived[0].minutes === 12 * CADENCE_MIN);
+}
+{
+  // ⚠️ A gap between two outages is a gap. Without this, a good day in the middle would be
+  // swallowed and the page would report one long outage that never happened.
+  let h = emptyHistory();
+  const put = (dayOffset, st) => { h = appendReading(h, reading(T0 - dayOffset * 86_400_000, { app: st, docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "ok" })); };
+  put(4, "down"); put(3, "ok"); put(2, "down"); put(1, "ok"); put(0, "ok");
+  ok("incidents: a clean day between two outages keeps them apart", buildStatus(h, [], T0).derived.length === 2);
+}
+{
+  // 🚨 SILENCE IS NOT AN OUTAGE — the rule this whole file keeps, and the one way this feature
+  // could be worse than the bug it fixes. A day nobody measured is grey; inventing a red entry
+  // out of it would put an outage in the record that can be checked against nothing.
+  let h = emptyHistory();
+  h = appendReading(h, reading(T0, { app: "none", docs: "none", mcp: "none", whep: "none", turn: "none", site: "none", plugs: "none" }));
+  const s = buildStatus(h, [], T0);
+  ok("incidents: 🚨 a day nobody measured produces NO incident", s.derived.length === 0);
+  ok("incidents: …and neither does an empty window at all", buildStatus(emptyHistory(), [], T0).derived.length === 0);
+  // And `warn` is slow, not absent — the same line the alert sender holds.
+  let w = appendReading(emptyHistory(), reading(T0, { app: "warn", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "ok" }));
+  ok("incidents: a degraded day is not an outage either", buildStatus(w, [], T0).derived.length === 0);
+}
+{
+  // A red run that ENDED is closed even when it is today's column — "still failing" is a fact
+  // about the current state, not about the calendar.
+  let h = emptyHistory();
+  h = appendReading(h, reading(T0 - 600_000, { app: "down", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "ok" }));
+  h = appendReading(h, reading(T0, { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "ok" }));
+  const s = buildStatus(h, [], T0);
+  ok("incidents: a fault that recovered today is CLOSED, not left hanging open",
+    s.derived.length === 1 && s.derived[0].ongoing === false);
+}
+{
+  // ⚠️ The derived entry stays language-neutral on purpose: the page makes the sentence, because
+  // a Czech verb has to agree with the component name ("Zásuvky neodpovídaly" / "MCP server
+  // neodpovídal") and a data file cannot carry that agreement.
+  let h = appendReading(emptyHistory(), reading(T0, { app: "down", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "ok" }));
+  const d = buildStatus(h, [], T0).derived[0];
+  ok("incidents: the document carries the component, never a rendered sentence",
+    typeof d.nm === "object" && typeof d.nm.cs === "string" && typeof d.nm.en === "string");
+  ok("incidents: …and no field of it is a Czech or English phrase about the fault",
+    !Object.values(d).some((v) => typeof v === "string" && /neodpov|outage|výpadek/i.test(v)));
+  // Derived only for rows the banner speaks for — the two must not disagree about what an
+  // outage is, which is exactly how this page got into trouble in the first place.
+  ok("incidents: only the rows the banner answers for can produce one",
+    deriveIncidents([{ id: "nope", nm: { cs: "x", en: "x" }, state: "down", days: ["down"], dayFacts: {} }], [dayKey(T0)]).length === 0);
+}
+{
+  // 🚨 The empty screen's sentence. It claimed ninety days while twelve were measured — the
+  // fault `w-2e88ec` fixed two sections higher and which never reached this one.
+  ok("incidents cs: the empty screen names the record it actually has",
+    STR.cs.noIncidents(12) === "Za 12 dní se záznamem nemáme v záznamu žádný výpadek.", STR.cs.noIncidents(12));
+  ok("incidents cs: …and a full window still says the plain sentence",
+    /posledních 90 dní/.test(STR.cs.noIncidents(90)));
+  for (const lang of ["cs", "en"]) {
+    ok(`incidents ${lang}: a partial record NEVER claims ninety days`,
+      !/90/.test(STR[lang].noIncidents(12)), STR[lang].noIncidents(12));
+    ok(`incidents ${lang}: …and it says how many it has`, /\b12\b/.test(STR[lang].noIncidents(12)));
+    // ⚠️ It must be a statement about the RECORD, not about whether anybody wrote an incident up.
+    // That swap IS the bug: the old sentence was true of the file and false of the world.
+    ok(`incidents ${lang}: the sentence is about the record, not about a file being maintained`,
+      /záznam|record/i.test(STR[lang].noIncidents(12)));
+  }
+  // 🚨 THE MERGE IS RUN, NOT PATTERN-MATCHED. The first version of this guard was a regex for
+  // `derivedAsIncidents()` in index.html — which matched the function's own DEFINITION, so
+  // deleting the call from the merge left it GREEN over a page back to one source. Measured, by
+  // sabotage, before this replaced it. The decision now lives in `incidentEntries`, where the
+  // suite runs it and the page keeps no copy.
+  ok("incidents: 🚨 a derived outage reaches the list with the hand-written file EMPTY",
+    incidentEntries({ incidents: [], derived: [{ from: "2026-09-20", to: "2026-09-20" }] }).length === 1);
+  ok("incidents: …and a hand-written one still does with no derived outage at all",
+    incidentEntries({ incidents: [{ at: "2026-09-19T10:00:00Z" }], derived: [] }).length === 1);
+  ok("incidents: …and both sources reach it together, neither standing in for the other",
+    incidentEntries({ incidents: [{ at: "2026-09-19T10:00:00Z" }], derived: [{ from: "2026-09-20", to: "2026-09-20" }] }).length === 2);
+  ok("incidents: the newest is first, whichever source it came from",
+    incidentEntries({ incidents: [{ at: "2026-09-19T10:00:00Z" }], derived: [{ from: "2026-09-20", to: "2026-09-20" }] })[0].kind === "derived");
+  ok("incidents: …and the other way round, so the order is not an artefact of the concatenation",
+    incidentEntries({ incidents: [{ at: "2026-09-21T10:00:00Z" }], derived: [{ from: "2026-09-20", to: "2026-09-20" }] })[0].kind === "hand");
+  ok("incidents: an older document with no derived field still renders its written incidents",
+    incidentEntries({ incidents: [{ at: "2026-09-19T10:00:00Z" }] }).length === 1 && incidentEntries(null).length === 0);
+  const html = readFileSync(join(HERE, "index.html"), "utf8");
+  ok("incidents: the page imports that decision rather than keeping its own copy",
+    /import \{[^}]*incidentEntries[^}]*\} from '\.\/i18n\.js'/.test(html));
+  ok("incidents: …and the empty sentence asks the document how much record there is",
+    /t\.noIncidents\(daysOnRecord\(data\)\)/.test(html));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

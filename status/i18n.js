@@ -78,6 +78,28 @@ export function durEn(min) {
  * A document without the field is an older status.json: keep the original ninety-day wording
  * rather than invent a smaller claim out of a missing number.
  */
+/**
+ * Both incident sources, normalised and newest first (`w-14c275`).
+ *
+ * 🚨 IT LIVES HERE SO THE SUITE CAN RUN IT — the same reason `daysOnRecord` does, and for the
+ * same reason spelled out beside that one. The first guard over this was a regex looking for
+ * `derivedAsIncidents()` in index.html; it matched the function's own DEFINITION, so deleting
+ * the call from the merge left the suite green over a page that had gone back to showing only
+ * the hand-written list. A guard green over a live fault is worse than no guard. The page now
+ * has no local copy of the decision for an edit to pin.
+ *
+ * `kind` is what the page renders differently: a hand-written entry carries a written analysis,
+ * a derived one carries a component and a span and has its sentence made at render time.
+ * @param {any} doc the published status document
+ */
+export function incidentEntries(doc) {
+  const hand = ((doc && doc.incidents) || []).map((n) => ({ kind: "hand", at: n.at || "", n }));
+  // A day key is a UTC calendar day; anchoring it at midnight UTC keeps the ordering in the same
+  // zone the bar is drawn in, rather than in the reader's.
+  const derived = ((doc && doc.derived) || []).map((d) => ({ kind: "derived", at: `${d.from}T00:00:00Z`, d }));
+  return [...hand, ...derived].sort((a, b) => Date.parse(b.at || 0) - Date.parse(a.at || 0));
+}
+
 export const daysOnRecord = (doc) => (doc && Number.isInteger(doc.daysWithData) ? doc.daysWithData : 90);
 
 export const dayCountCs = (n) => czPlural(n, "den", "dny", "dní");
@@ -105,8 +127,23 @@ export const STR = {
     tipToday: "dnes, zatím",
     where: "sonda běží mimo naši infrastrukturu",
     probe: "Sonda běží každých 5 minut mimo hlavní server.",
-    noIncidents: "Za posledních 90 dní jsme nezaznamenali žádný incident.",
+    // 🚨 It said "Za posledních 90 dní jsme nezaznamenali žádný incident." over a plug outage in
+    // progress (owner, 2026-09-21), because it described a hand-written file holding `[]` rather
+    // than the record. Two faults in one sentence: it measured whether somebody had written an
+    // incident up, and it claimed ninety days while twelve had been measured. Both gone — it is
+    // now a statement about the RECORD, bounded by how much record there is, and the outages in
+    // that record put themselves in the list (`deriveIncidents`).
+    noIncidents: (n = 90) => `Za ${n >= 90 ? "posledních 90 dní" : `${dayCountCs(n)} se záznamem`} nemáme v záznamu žádný výpadek.`,
     resolved: "Vyřešeno", ongoing: "Probíhá",
+    // The derived entries. A noun phrase on purpose: a Czech verb would have to agree with the
+    // component name — "Zásuvky neodpovídaly" but "MCP server neodpovídal" — and that agreement
+    // is not something a template can carry. See `w-1b2a78`.
+    incTitle: (nm) => `Výpadek: ${nm}`,
+    incFrom: "Začátek", incTo: "Konec", incDay: "Den",
+    incApprox: (d) => `Nedostupné přibližně ${d}`,
+    incSpanOne: (d) => d,
+    incSpan: (a, b) => `${a} – ${b}`,
+    incDerived: "ze záznamu sondy",
     tOk: "Všechny systémy fungují", tWarn: "Zhoršený provoz", tPartial: "Výpadek části služby",
     tDown: "Rozsáhlý výpadek", tStale: "Nevíme, jaký je stav",
     // ⚠️ "pět rovin" until 2026-09-21, when the banner started answering for seven. A count
@@ -140,8 +177,15 @@ export const STR = {
     tipToday: "today, so far",
     where: "probed from outside our infrastructure",
     probe: "Probed every 5 minutes from off our main server.",
-    noIncidents: "No incidents recorded in the last 90 days.",
+    // See the Czech note above — it described a hand-written file, not the record.
+    noIncidents: (n = 90) => `No outage in the record for the ${n >= 90 ? "last 90 days" : `${n} day${n === 1 ? "" : "s"} on record`}.`,
     resolved: "Resolved", ongoing: "Ongoing",
+    incTitle: (nm) => `Outage: ${nm}`,
+    incFrom: "Started", incTo: "Ended", incDay: "Day",
+    incApprox: (d) => `Unavailable for about ${d}`,
+    incSpanOne: (d) => d,
+    incSpan: (a, b) => `${a} – ${b}`,
+    incDerived: "from the probe's record",
     tOk: "All systems operational", tWarn: "Degraded performance", tPartial: "Partial outage",
     tDown: "Major outage", tStale: "We do not know the current state",
     // See the Czech note above — a hard-coded plane count that nothing could keep honest.
