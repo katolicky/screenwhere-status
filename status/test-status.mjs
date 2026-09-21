@@ -20,7 +20,7 @@ process.env.SW_STATUS_TIMEOUT_MS = "1500";
 process.env.SW_STATUS_SLOW_MS = "300";
 
 const { probeHttp, probeStun, probeAgents, COMPONENTS } = await import("./probe.mjs");
-const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, hhmm, INFRA, CORE, PREMISES, deriveIncidents, WINDOW_DAYS, WHY_MAX, CADENCE_MIN } = await import("./history.mjs");
+const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, hhmm, INFRA, CORE, PREMISES, deriveIncidents, warnIsOutage, WINDOW_DAYS, WHY_MAX, CADENCE_MIN } = await import("./history.mjs");
 const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR, dayTip, daysOnRecord, incidentEntries } = await import("./i18n.js");
 const { decide, emptyAlert, view, send, downIds, mentionFor, STREAK } = await import("./alert.mjs");
 
@@ -1027,11 +1027,110 @@ ok("harness: tsconfig includes status/, or its @ts-check headers check nothing",
     incidentEntries({ incidents: [{ at: "2026-09-21T10:00:00Z" }], derived: [{ from: "2026-09-20", to: "2026-09-20" }] })[0].kind === "hand");
   ok("incidents: an older document with no derived field still renders its written incidents",
     incidentEntries({ incidents: [{ at: "2026-09-19T10:00:00Z" }] }).length === 1 && incidentEntries(null).length === 0);
+}
+{
+  // ── the cadence is the document's, not the page's ──────────────────────────────────────────
+  // 🚨 The footer said "Sonda běží každých 5 minut" as a LITERAL, which is precisely what
+  // `CADENCE_MIN` is published to prevent — its own comment says a page with the 5 baked in
+  // "would go on saying fifteen after the cron changed". The day tooltip already read the
+  // document; this string, one file over, had been missed (found 2026-09-21 auditing every
+  // sentence on the page after two claims-wider-than-the-measurement faults in one morning).
+  for (const lang of ["cs", "en"]) {
+    ok(`cadence ${lang}: the sentence takes the cadence rather than asserting it`,
+      /\b10\b/.test(STR[lang].probe(10)) && !/\b5\b/.test(STR[lang].probe(10)), STR[lang].probe(10));
+    ok(`cadence ${lang}: …and an older document with no cadence keeps the five-minute wording`,
+      /\b5\b/.test(STR[lang].probe()), STR[lang].probe());
+  }
+  // ⚠️ A changed cron must not print "každých 2 minut" — Czech counts this noun.
+  ok("cadence cs: the noun agrees with the number",
+    STR.cs.probe(1).includes("minutu") && STR.cs.probe(2).includes("minuty") && STR.cs.probe(10).includes("minut"),
+    [STR.cs.probe(1), STR.cs.probe(2), STR.cs.probe(10)].join(" | "));
+  ok("cadence en: …and so does the English one", STR.en.probe(1).includes("every minute"), STR.en.probe(1));
+  // 🚨 The page runs this before its first fetch. `null` is NOT `undefined`, so a default
+  // parameter does not fill it in — a bare `data && data.cadenceMin` printed "každé null minut".
+  ok("cadence: a document that has not loaded yet does not print a null into the sentence",
+    !/null|undefined|NaN/.test(STR.cs.probe(undefined)) && !/null|undefined|NaN/.test(STR.en.probe(undefined)));
+  {
+    const html = readFileSync(join(HERE, "index.html"), "utf8");
+    ok("cadence: the page asks the document for it and guards the not-yet-loaded case",
+      /t\.probe\(\(data && data\.cadenceMin\) \|\| undefined\)/.test(html));
+  }
+}
+{
   const html = readFileSync(join(HERE, "index.html"), "utf8");
   ok("incidents: the page imports that decision rather than keeping its own copy",
     /import \{[^}]*incidentEntries[^}]*\} from '\.\/i18n\.js'/.test(html));
   ok("incidents: …and the empty sentence asks the document how much record there is",
     /t\.noIncidents\(daysOnRecord\(data\)\)/.test(html));
+}
+
+
+// ── `warn` means two different things, and the maths knew only one (2026-09-21) ───────────────
+{
+  // 🚨 THE FAULT, WHICH IS INVISIBLE TODAY. On the five cloud planes `warn` is our own latency
+  // measurement — it answered, slowly — so it counts as available. On the two aggregate rows the
+  // relay sends `warn` when SOME devices are entirely dead and the rest are fine. With one plug
+  // the row says `down` and the figure falls; with two plugs and one dead it said `warn`, the
+  // figure did not move at all, and the row read "Zhoršené" about a device that was stone dead.
+  const sampleDay = (comp, st, n) => {
+    let h = emptyHistory();
+    for (let i = 0; i < n; i++) {
+      const states = { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "ok" };
+      states[comp] = i === 0 ? st : "ok";
+      h = appendReading(h, reading(T0 + i * 300_000, states));
+    }
+    return buildStatus(h, [], T0 + n * 300_000);
+  };
+  const pctOf = (s, id) => s.components.find((c) => c.id === id).uptime90;
+  ok("aggregate: 🚨 one dead device among live ones LOWERS the figure — it is not 'slow'",
+    pctOf(sampleDay("plugs", "warn", 4), "plugs") < 100, String(pctOf(sampleDay("plugs", "warn", 4), "plugs")));
+  ok("aggregate: …and a genuinely slow cloud plane still counts as available",
+    pctOf(sampleDay("app", "warn", 4), "app") === 100, String(pctOf(sampleDay("app", "warn", 4), "app")));
+  ok("aggregate: the site row follows the same rule as the plugs",
+    pctOf(sampleDay("site", "warn", 4), "site") < 100);
+  // ⚠️ The 90-day figure is summed per component for exactly this reason: one flat list cannot
+  // carry two rules, and the flat version quietly applied the lenient one to all seven rows.
+  ok("aggregate: the overall figure moves for a premises warn",
+    sampleDay("plugs", "warn", 4).overallPct < 100);
+  ok("aggregate: …and does NOT move for a slow cloud plane",
+    sampleDay("app", "warn", 4).overallPct === 100);
+}
+{
+  // The banner has to agree with the figure. A dead plug beside a live one is part of the
+  // service being down, not the service being sluggish.
+  let h = appendReading(emptyHistory(), reading(T0, { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "warn" }));
+  const s = buildStatus(h, [], T0);
+  ok("aggregate: a premises `warn` puts the banner on `partial`, not `warn`", s.overall === "partial");
+  ok("aggregate: …and the row is named as affected", s.affected.some((n) => n.cs === "Zásuvky"));
+  let c = appendReading(emptyHistory(), reading(T0, { app: "warn", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "ok" }));
+  ok("aggregate: …while a slow cloud plane is still only `warn`", buildStatus(c, [], T0).overall === "warn");
+}
+{
+  // The page must be TOLD which rows count devices; it keeps no list of its own, for the same
+  // reason `daysOnRecord` and `incidentEntries` live where the suite can run them.
+  const s = buildStatus(appendReading(emptyHistory(), reading(T0, { app: "ok", plugs: "ok", site: "ok" })), [], T0);
+  const flagged = s.components.filter((c) => c.aggregate).map((c) => c.id).sort();
+  ok("aggregate: the document flags exactly the rows that count devices",
+    flagged.join() === [...PREMISES].sort().join(), flagged.join());
+  ok("aggregate: …and the flag is the same list the maths uses, not a second copy",
+    s.components.every((c) => !!c.aggregate === warnIsOutage(c.id)));
+  const html = readFileSync(join(HERE, "index.html"), "utf8");
+  ok("aggregate: the page takes that flag from the document rather than listing the rows itself",
+    /c\.aggregate/.test(html) && !/'plugs'|"plugs"/.test(html));
+}
+{
+  // 🚨 And the WORDS. "Zhoršené" about a dead device is the same class of fault as the banner
+  // saying "Všechny systémy fungují" over a red row: a label claiming less than what happened.
+  for (const lang of ["cs", "en"]) {
+    ok(`aggregate ${lang}: a device row has its own word for a partial outage`,
+      STR[lang].partly && STR[lang].partly !== STR[lang].warn, `${STR[lang].partly} / ${STR[lang].warn}`);
+    // ⚠️ The banner sentence now covers a silent plane AND a partly-dead row, so it may not say
+    // "does not answer" — that is a claim about the whole row and false of the second case.
+    ok(`aggregate ${lang}: the banner's verb is true of both kinds of row`,
+      !/Neodpovídá|Not answering/.test(STR[lang].xPartial("X", "Y")), STR[lang].xPartial("X", "Y"));
+  }
+  ok("aggregate cs: the word says part of it is down, not that it is slow",
+    /Část|část/.test(STR.cs.partly), STR.cs.partly);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

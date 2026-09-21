@@ -358,7 +358,10 @@ function render(){
   $('#hWindow').textContent = win;
   $('#hIncWindow').textContent = win;
   $('#whereText').textContent = t.where;
-  $('#footProbe').textContent = t.probe;
+  // The cadence is the document's, never this page's — same rule as the day tooltip below.
+  // ⚠️ `|| undefined`, not a bare `data && …`: this runs before the first fetch too, and a
+  // default parameter only fills in for `undefined` — `null` would have printed "každé null minut".
+  $('#footProbe').textContent = t.probe((data && data.cadenceMin) || undefined);
   syncTheme();   // the button's only text is its label, so it follows the language switch too
   $('#legend').innerHTML = [['--ok-dim', t.legOk], ['--warn', t.legWarn], ['--down', t.legDown], ['--nodata', t.legNone]]
     .map(([v, s]) => `<span><i style="background:var(${v})"></i>${esc(s)}</span>`).join('');
@@ -424,13 +427,16 @@ function renderComponents(stale){
     // caught: the strip and the badge disagreed, and the eye believes the strip.
     if (days.length) days[days.length - 1] = stale ? 'nodata' : ({ ok:'ok', warn:'warn', down:'down' }[c.state] || 'nodata');
     const st = stale ? 'none' : (['ok','warn','down'].includes(c.state) ? c.state : 'none');
+    // A `warn` on a row that counts devices is not a latency — see `partly` in i18n.js. The flag
+    // comes from the document; the page keeps no list of which rows those are.
+    const stWord = (st === 'warn' && c.aggregate) ? t.partly : t[st];
     const pctTxt = c.uptime90 == null ? '—' : p(c.uptime90);
     return `<div class="row">
       <div class="rowhd">
         <span class="nm">${esc(L(c.nm))}</span>
         <span class="ep">${esc(L(c.ep))}</span>
         <span class="grow"></span>
-        <span class="state s-${st}"><span class="d"></span>${esc(t[st])}</span>
+        <span class="state s-${st}"><span class="d"></span>${esc(stWord)}</span>
         <span class="pct num">${esc(pctTxt)}</span>
       </div>
       <div class="bars" role="group" aria-label="${esc(L(c.nm))} — ${esc(t.window(daysOnRecord(data)))}">${days.map((d, i) => {

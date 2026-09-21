@@ -142,16 +142,38 @@ export function dayState(counts) {
   return "nodata";
 }
 
-/** Available = answered at all. A degraded sample is slow, not absent. */
-export function uptimePct(list) {
+/**
+ * 🚨 `warn` MEANS TWO DIFFERENT THINGS, and until 2026-09-21 the maths knew only one of them.
+ *
+ * On the five cloud planes a `warn` sample is OUR OWN measurement of latency — it answered, just
+ * slowly — so "available = answered at all" is right and it counts as up.
+ *
+ * On the two aggregate rows it is not a speed at all. The relay reports `warn` when SOME of the
+ * devices are entirely dead and the rest are fine (`verdict()` in relay/avail.mjs). So with one
+ * plug the row said `down` and the figure fell, and with two plugs and one dead it said `warn`
+ * and the figure did not move AT ALL — a device stone dead, counted as available, under a label
+ * reading "Zhoršené". Found 2026-09-21 auditing every sentence on the page; invisible today only
+ * because exactly one plug is measured. Owner's call: partly dead is not available.
+ *
+ * Hence the flag. It is threaded from `PREMISES` at every call rather than guessed here, because
+ * this function is also handed raw count lists by the suite.
+ */
+export const warnIsOutage = (id) => PREMISES.includes(id);
+
+/** Available = answered at all — except where `warn` is not a speed. See `warnIsOutage`. */
+export function uptimePct(list, warnDown = false) {
   let up = 0, all = 0;
-  for (const c of list) { if (!c) continue; up += c.ok + c.warn; all += c.ok + c.warn + c.down; }
+  for (const c of list) {
+    if (!c) continue;
+    up += c.ok + (warnDown ? 0 : c.warn);
+    all += c.ok + c.warn + c.down;
+  }
   return all === 0 ? null : (up / all) * 100;
 }
 
 /** Did anything in this window actually fail? Needed by the rounding rule below. */
-export function anyDown(list) {
-  for (const c of list) if (c && c.down > 0) return true;
+export function anyDown(list, warnDown = false) {
+  for (const c of list) if (c && (c.down > 0 || (warnDown && c.warn > 0))) return true;
   return false;
 }
 
@@ -254,7 +276,8 @@ export function buildStatus(hist, incidents, now = Date.now()) {
   const components = COMPONENTS.map((c) => {
     const counts = keys.map((k) => hist.days[k]?.[c.id]);
     const days = keys.map((k) => dayState(hist.days[k]?.[c.id]));
-    const pct = displayPct(uptimePct(counts), anyDown(counts));
+    const wd = warnIsOutage(c.id);
+    const pct = displayPct(uptimePct(counts, wd), anyDown(counts, wd));
     // Keyed by date and carried ONLY for the days that had trouble. A green day needs nothing
     // beyond its date, and 90 × 6 objects of "nothing happened" would be most of a file that
     // every open tab re-fetches once a minute.
@@ -268,6 +291,10 @@ export function buildStatus(hist, incidents, now = Date.now()) {
     });
     return {
       id: c.id, nm: c.nm, ep: c.ep,
+      // The page needs to know which rows count devices, because on those a `warn` reads
+      // "part of them is dead", not "it is slow" — a different word and a different colour of
+      // claim. Published rather than re-derived, so the page keeps no copy of the list.
+      ...(warnIsOutage(c.id) ? { aggregate: true } : {}),
       state: /** @type {State} */ (latest?.states?.[c.id] || "none"),
       detail: latest?.detail?.[c.id] || "",
       uptime90: pct,
@@ -277,6 +304,10 @@ export function buildStatus(hist, incidents, now = Date.now()) {
   });
   const core = components.filter((c) => CORE.includes(c.id));
   const infra = components.filter((c) => INFRA.includes(c.id));
+  // ⚠️ The banner reads a premises `warn` as an outage for the same reason the figure does: it
+  // is not a speed, it is some of the devices being dead. Without this a dead plug beside a live
+  // one would read "Zhoršený provoz" — degraded — for something that is not answering at all.
+  const stateOf = (/** @type {any} */ c) => (warnIsOutage(c.id) && c.state === "warn" ? "down" : c.state);
   // 🚨 `down` is asked of CORE and everything else of INFRA, and the asymmetry is the whole
   // design — see CORE above for why a premises row cannot say "everything is down".
   //
@@ -286,11 +317,21 @@ export function buildStatus(hist, incidents, now = Date.now()) {
   // page that goes blank on a routine deploy is one nobody trusts on the day it means it.
   // `none` here is silence, and silence is neither a claim of health nor an accusation.
   const overall = core.every((c) => c.state === "down") && core.length > 0 ? "down"
-    : infra.some((c) => c.state === "down") ? "partial"
-    : infra.some((c) => c.state === "warn") ? "warn"
+    : infra.some((c) => stateOf(c) === "down") ? "partial"
+    : infra.some((c) => stateOf(c) === "warn") ? "warn"
     : core.every((c) => c.state === "ok") ? "ok" : "none";
-  const infraCounts = keys.flatMap((k) => INFRA.map((id) => hist.days[k]?.[id]));
-  const overallPct = displayPct(uptimePct(infraCounts), anyDown(infraCounts));
+  // ⚠️ Summed PER COMPONENT rather than over one flat list, because the two aggregate rows count
+  // a `warn` as unavailable and the five cloud planes do not. A single flat list cannot carry
+  // two rules, and the flat version silently used the lenient one for all seven.
+  let up = 0, all = 0, hadBad = false;
+  for (const id of INFRA) {
+    const wd = warnIsOutage(id);
+    const list = keys.map((k) => hist.days[k]?.[id]);
+    const p = uptimePct(list, wd);
+    if (p !== null) for (const c of list) { if (!c) continue; up += c.ok + (wd ? 0 : c.warn); all += c.ok + c.warn + c.down; }
+    if (anyDown(list, wd)) hadBad = true;
+  }
+  const overallPct = displayPct(all === 0 ? null : (up / all) * 100, hadBad);
   const cutoff = now - WINDOW_DAYS * 86_400_000;
   return {
     generatedAt: new Date(latest?.ts || now).toISOString(),
@@ -315,7 +356,7 @@ export function buildStatus(hist, incidents, now = Date.now()) {
     overallPct,
     // Named so the banner can say what is NOT affected — "video is slow, control is not" is the
     // sentence that stops a degraded plane from reading as a dead product.
-    affected: components.filter((c) => INFRA.includes(c.id) && (c.state === "down" || c.state === "warn")).map((c) => c.nm),
+    affected: components.filter((c) => INFRA.includes(c.id) && (stateOf(c) === "down" || stateOf(c) === "warn")).map((c) => c.nm),
     unaffected: components.filter((c) => INFRA.includes(c.id) && c.state === "ok").map((c) => c.nm),
     components,
     incidents: (incidents || []).filter((n) => !n.at || Date.parse(n.at) >= cutoff),

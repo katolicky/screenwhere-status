@@ -115,6 +115,11 @@ export const STR = {
     // `window` takes the number of days we have samples for, NOT the width of the bar.
     window: (n) => (n >= 90 ? "posledních 90 dní" : `${dayCountCs(n)} se záznamem z 90`),
     ok: "Dostupné", warn: "Zhoršené", down: "Výpadek", none: "Bez dat",
+    // 🚨 The word for a `warn` on a row that COUNTS DEVICES. There it does not mean "slow" — it
+    // means some of them are dead and the rest are fine, and calling that "Zhoršené" described a
+    // stone-dead plug as a sluggish one (2026-09-21). The five cloud planes keep "Zhoršené",
+    // where it really is a latency.
+    partly: "Část nefunguje",
     legOk: "dostupné", legWarn: "zhoršené", legDown: "výpadek",
     legNone: "bez dat — nevíme, ne „v pořádku“",
     scale90: "před 90 dny", scaleToday: "dnes",
@@ -126,7 +131,12 @@ export const STR = {
     tipWindow: (a, b) => (a === b ? `Problém v ${a} UTC` : `Problémy ${a}–${b} UTC`),
     tipToday: "dnes, zatím",
     where: "sonda běží mimo naši infrastrukturu",
-    probe: "Sonda běží každých 5 minut mimo hlavní server.",
+    // ⚠️ The cadence came from the document, not from this sentence, since 2026-09-21. It was
+    // written "každých 5 minut" — the exact thing `CADENCE_MIN` is published to prevent, and the
+    // comment beside it says so in as many words ("a page with the 5 baked in would go on saying
+    // fifteen after the cron changed"). The day tooltip had been fixed; this string, one file
+    // over, had not. Plural-aware because a changed cron would otherwise print "každých 2 minut".
+    probe: (m = 5) => `Sonda běží každé ${czPlural(m, "minutu", "minuty", "minut")} mimo hlavní server.`,
     // 🚨 It said "Za posledních 90 dní jsme nezaznamenali žádný incident." over a plug outage in
     // progress (owner, 2026-09-21), because it described a hand-written file holding `[]` rather
     // than the record. Two faults in one sentence: it measured whether somebody had written an
@@ -154,7 +164,10 @@ export const STR = {
       : n >= 90 ? `Za posledních 90 dní jsme byli dostupní ${pct(p, "cs")} času.`
       : `Za ${dayCountCs(n)} se záznamem jsme byli dostupní ${pct(p, "cs")} času.`),
     xWarn: (a, u) => `Zhoršeně odpovídá: ${a}.` + (u ? ` Ostatní roviny to neovlivňuje (${u}).` : ""),
-    xPartial: (a, u) => `Neodpovídá: ${a}.` + (u ? ` Zbytek služby běží (${u}).` : ""),
+    // ⚠️ "Nefunguje", not "Neodpovídá": since the aggregate rows reach this sentence, it has to be
+    // true both of a plane that is silent and of a row where some devices are dead and some are
+    // not. "Does not answer" is a claim about the whole row and would be false of the second.
+    xPartial: (a, u) => `Nefunguje: ${a}.` + (u ? ` Zbytek služby běží (${u}).` : ""),
     xDown: "Server neodpovídá na žádné rovině.",
     xStale: (d) => `Tahle stránka se neaktualizovala ${d}. Poslední známý stav si tu můžeš přečíst níž, ale neručíme za něj — mlčí sonda, ne nutně služba.`,
     xNoData: "Nepodařilo se načíst data o stavu. Neznamená to, že je služba mimo provoz — znamená to, že tahle stránka teď nic neví.",
@@ -168,6 +181,8 @@ export const STR = {
     components: "Components", incidents: "Incidents",
     window: (n) => (n >= 90 ? "last 90 days" : `${dayCountEn(n)} on record of 90`),
     ok: "Available", warn: "Degraded", down: "Outage", none: "No data",
+    // See the Czech note — "Degraded" described a dead device as a slow one.
+    partly: "Partly down",
     legOk: "available", legWarn: "degraded", legDown: "outage",
     legNone: "no data — “unknown”, not “fine”",
     scale90: "90 days ago", scaleToday: "today",
@@ -176,7 +191,8 @@ export const STR = {
     tipWindow: (a, b) => (a === b ? `Trouble at ${a} UTC` : `Trouble ${a}–${b} UTC`),
     tipToday: "today, so far",
     where: "probed from outside our infrastructure",
-    probe: "Probed every 5 minutes from off our main server.",
+    // See the Czech note above — a cadence the page asserted instead of reading.
+    probe: (m = 5) => `Probed every ${m === 1 ? "minute" : `${m} minutes`} from off our main server.`,
     // See the Czech note above — it described a hand-written file, not the record.
     noIncidents: (n = 90) => `No outage in the record for the ${n >= 90 ? "last 90 days" : `${n} day${n === 1 ? "" : "s"} on record`}.`,
     resolved: "Resolved", ongoing: "Ongoing",
@@ -193,7 +209,8 @@ export const STR = {
       : n >= 90 ? `We were available ${pct(p, "en")} of the time over the last 90 days.`
       : `We were available ${pct(p, "en")} of the time over the ${dayCountEn(n)} we have on record.`),
     xWarn: (a, u) => `Responding slowly: ${a}.` + (u ? ` Other planes are unaffected (${u}).` : ""),
-    xPartial: (a, u) => `Not answering: ${a}.` + (u ? ` The rest of the service is up (${u}).` : ""),
+    // See the Czech note — true of a silent plane and of a partly-dead aggregate alike.
+    xPartial: (a, u) => `Down: ${a}.` + (u ? ` The rest of the service is up (${u}).` : ""),
     xDown: "The server is answering on no plane.",
     xStale: (d) => `This page has not updated for ${d}. The last known state is below, but we do not stand behind it — it is the prober that is quiet, not necessarily the service.`,
     xNoData: "Could not load the status data. That does not mean the service is down — it means this page currently knows nothing.",
