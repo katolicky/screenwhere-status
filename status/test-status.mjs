@@ -21,7 +21,7 @@ process.env.SW_STATUS_SLOW_MS = "300";
 
 const { probeHttp, probeStun, probeAgents, COMPONENTS } = await import("./probe.mjs");
 const { appendReading, buildStatus, emptyHistory, dayState, uptimePct, displayPct, windowKeys, dayKey, hhmm, INFRA, CORE, PREMISES, deriveIncidents, warnIsOutage, WINDOW_DAYS, WHY_MAX, CADENCE_MIN } = await import("./history.mjs");
-const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR, dayTip, daysOnRecord, incidentEntries } = await import("./i18n.js");
+const { czPlural, agoCs, durCs, durEn, agoEn, pct, STR, dayTip, daysOnRecord, incidentEntries, todayState, barClass } = await import("./i18n.js");
 const { decide, emptyAlert, view, send, downIds, mentionFor, STREAK } = await import("./alert.mjs");
 
 let pass = 0, fail = 0;
@@ -1131,6 +1131,101 @@ ok("harness: tsconfig includes status/, or its @ts-check headers check nothing",
   }
   ok("aggregate cs: the word says part of it is down, not that it is slow",
     /Část|část/.test(STR.cs.partly), STR.cs.partly);
+}
+
+
+// ── today's column is a DAY, not a moment (owner, 2026-09-21) ─────────────────────────────────
+{
+  // 🚨 THE REPORTED FAULT. A plug was down 05:15–08:55 UTC — 47 confirmed failing samples — and
+  // recovered. The page overwrote today's column with the CURRENT state, so the column went
+  // green while its own tooltip still read "Nedostupné přibližně 3 hodiny". One tooltip saying
+  // two things, and the eye believes the strip.
+  ok("today: 🚨 an outage earlier today keeps the column red after it recovers",
+    todayState("down", "ok", false) === "down");
+  ok("today: …and a degraded spell keeps it amber",
+    todayState("warn", "ok", false) === "warn");
+  // ⚠️ The overwrite it replaces was ITSELF a fix, for the opposite direction. Keep that case:
+  // a row failing right now may never draw green, whatever the record says.
+  ok("today: a row failing RIGHT NOW is never drawn green",
+    todayState("ok", "down", false) === "down" && todayState("nodata", "down", false) === "down");
+  ok("today: …nor amber-washed when it is actually down", todayState("warn", "down", false) === "down");
+  // A day with no samples yet is grey, not green — "we could not ask" is not "it is fine", the
+  // rule this page keeps everywhere.
+  ok("today: a day with nothing in it yet stays grey",
+    todayState("nodata", "none", false) === "nodata" && todayState(undefined, undefined, false) === "nodata");
+  ok("today: a quiet row on a recorded-good day is green", todayState("ok", "ok", false) === "ok");
+  // Staleness outranks everything: past the gate we are not entitled to draw a colour at all.
+  ok("today: once the document is stale the column claims nothing",
+    todayState("down", "down", true) === "nodata" && todayState("ok", "ok", true) === "nodata");
+  const html = readFileSync(join(HERE, "index.html"), "utf8");
+  ok("today: the page imports that decision rather than keeping its own copy",
+    /import \{[^}]*todayState[^}]*\} from '\.\/i18n\.js'/.test(html));
+  // 🚨 And it must not still be assigning the instant. Asserted as the ABSENCE of the shape that
+  // threw the record away, because the import alone would pass over a page that ignored it.
+  ok("today: …and no longer overwrites the column with the current state",
+    !/days\[days\.length - 1\] = stale \? 'nodata' :/.test(html));
+}
+
+
+// ── "it is working again" — the red column under a green badge, explained ─────────────────────
+{
+  const f = { down: 47, warn: 0, from: "05:15", to: "08:55", why: "1 failing (confirmed on retry)" };
+  const tip = (over = {}, lang = "cs") => dayTip({ key: "2026-09-21", state: "down", facts: f, cadenceMin: 5, today: true, now: "ok", ...over }, lang);
+  const says = (t) => t.lines.join(" | ");
+  ok("recovered: 🚨 today's tooltip says the trouble is over, and when",
+    /08:55/.test(says(tip())) && /zase funguje/.test(says(tip())), says(tip()));
+  ok("recovered: …in English too", /Working again since 08:55/.test(says(tip({}, "en"))), says(tip({}, "en")));
+  // ⚠️ Three ways it would be a lie, each asserted.
+  ok("recovered: NOT on a row that is still failing", !/zase funguje/.test(says(tip({ now: "down" }))));
+  ok("recovered: …nor while it is merely limping", !/zase funguje/.test(says(tip({ now: "warn" }))));
+  ok("recovered: …nor on an older day, where 'now' is about a different day",
+    !/zase funguje/.test(says(tip({ today: false }))));
+  ok("recovered: …nor on a day that had no trouble to recover from",
+    !/zase funguje/.test(says(tip({ state: "ok", facts: null }))));
+  ok("recovered: a degraded spell that has cleared says it too", /zase funguje/.test(says(tip({ state: "warn" }))));
+  // A day whose end time never got recorded still says the useful half rather than printing
+  // "Od undefined UTC".
+  ok("recovered: with no end time it says the plain sentence, never a null",
+    /Teď už zase funguje/.test(says(tip({ facts: { down: 3, warn: 0 } }))) &&
+    !/undefined|null/.test(says(tip({ facts: { down: 3, warn: 0 } }))), says(tip({ facts: { down: 3, warn: 0 } })));
+  const html = readFileSync(join(HERE, "index.html"), "utf8");
+  ok("recovered: the page hands the tooltip the current state so it can tell",
+    /dayTip\(\{[^}]*now: c\.state/.test(html));
+}
+
+
+// ── the recovered column: the day's colour with a green foot ──────────────────────────────────
+{
+  // Owner, 2026-09-21: a day that had a three-hour outage and is fine now is "ani zelená, ani
+  // červená". It keeps the DAY's colour — red means "this day had an outage", which is what the
+  // other 89 columns mean — and gains a green foot for "and it is up now".
+  ok("bar: today's column is marked recovered when the trouble has cleared",
+    barClass("down", "ok", true) === "down recovered");
+  ok("bar: …a cleared degraded spell too", barClass("warn", "ok", true) === "warn recovered");
+  // ⚠️ Four ways it would be wrong, each asserted.
+  ok("bar: NOT while the row is still failing", barClass("down", "down", true) === "down");
+  ok("bar: …nor while it is limping", barClass("down", "warn", true) === "down");
+  ok("bar: …nor on any older column, where 'now' says nothing about that day",
+    barClass("down", "ok", false) === "down");
+  ok("bar: …nor on a day that had no trouble at all",
+    barClass("ok", "ok", true) === "ok" && barClass("nodata", "ok", true) === "nodata");
+  const html = readFileSync(join(HERE, "index.html"), "utf8");
+  ok("bar: the page asks for the class rather than composing one itself",
+    /barClass\(d, c\.state, i === days\.length - 1\)/.test(html));
+  // 🚨 A rule that loses on specificity is a rule that does nothing, and this file has shipped
+  // one before. `.bars i.down` (0,2,1) sets the background; the recovered rule must out-rank it,
+  // and it must come from the SAME sheet — so assert both classes are on the selector and that
+  // it is written after the plain one.
+  const plain = html.indexOf(".bars i.down{");
+  const rec = html.indexOf(".bars i.down.recovered{");
+  ok("bar: the recovered rule is more specific than the plain one AND comes after it",
+    plain > 0 && rec > plain);
+  ok("bar: …and it keeps the day's own colour rather than inventing a hue",
+    /\.bars i\.down\.recovered\{[^}]*var\(--down\)/.test(html) && /\.bars i\.warn\.recovered\{[^}]*var\(--warn\)/.test(html));
+  // ⚠️ Amber is NOT reused for this. If it ever is, a three-hour outage and half an hour of
+  // latency become the same picture — the one-name-two-facts fault fixed twice the same day.
+  ok("bar: a recovered outage is never painted with the degraded colour",
+    !/\.bars i\.down\.recovered\{[^}]*var\(--warn\)/.test(html));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

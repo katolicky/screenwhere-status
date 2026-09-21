@@ -100,6 +100,52 @@ export function incidentEntries(doc) {
   return [...hand, ...derived].sort((a, b) => Date.parse(b.at || 0) - Date.parse(a.at || 0));
 }
 
+/**
+ * The colour of TODAY's column — the worse of what the day recorded and what is true right now.
+ *
+ * 🚨 THE PAGE USED TO OVERWRITE THE RECORD WITH THE INSTANT, and the owner caught the result on
+ * 2026-09-21: a plug that was down 05:15–08:55 UTC and had since recovered drew a GREEN column
+ * whose own tooltip read "Nedostupné přibližně 3 hodiny". One tooltip contradicting itself.
+ *
+ * ⚠️ That overwrite was itself a fix, for the opposite case — "drawing it green under an «Outage»
+ * badge", where the strip and the badge disagreed. Replacing the record with the instant cured
+ * that direction and broke this one, because a day is not a moment. Taking the WORSE of the two
+ * satisfies both: a day that had an outage stays red once it recovers, and a day whose record is
+ * still empty (no samples since midnight UTC) cannot draw green under a failing row.
+ *
+ * ⚠️ The strip and the row's badge are then ALLOWED to disagree, and must: the strip answers
+ * "what happened today", the badge answers "what is true now". The original reading of that
+ * disagreement as a bug is what cost the record.
+ * @param {string} recorded the day's own state, from the document
+ * @param {string} current the component's state right now
+ * @param {boolean} stale whether we have stopped believing the document at all
+ */
+export function todayState(recorded, current, stale) {
+  if (stale) return "nodata";
+  const rank = { ok: 0, warn: 1, down: 2 };
+  const a = rank[recorded], b = rank[current];
+  const worst = Math.max(a === undefined ? -1 : a, b === undefined ? -1 : b);
+  return worst < 0 ? "nodata" : ["ok", "warn", "down"][worst];
+}
+
+/**
+ * The CSS classes for one column. Today's gets `recovered` when the day is painted for trouble
+ * that has since cleared — the bar then carries the day's colour with a green foot.
+ *
+ * ⚠️ WHY NOT SIMPLY AMBER (owner asked, 2026-09-21): amber already means "Zhoršené" — answering,
+ * slowly. Painting "had an outage, fine now" with it would make a three-hour outage look exactly
+ * like half an hour of latency, which is the one-name-two-facts fault this page was fixed for
+ * twice the same day. And red is not "broken now": it is "this day had an outage", which is what
+ * the other 89 columns mean too. So the hue keeps its meaning and the recovery is said beside it.
+ * @param {string} drawn the state the column is painted for
+ * @param {string} current the component's state right now
+ * @param {boolean} isToday
+ */
+export function barClass(drawn, current, isToday) {
+  const recovered = isToday && current === "ok" && (drawn === "down" || drawn === "warn");
+  return recovered ? `${drawn} recovered` : drawn;
+}
+
 export const daysOnRecord = (doc) => (doc && Number.isInteger(doc.daysWithData) ? doc.daysWithData : 90);
 
 export const dayCountCs = (n) => czPlural(n, "den", "dny", "dní");
@@ -130,6 +176,12 @@ export const STR = {
     tipWarn: (d) => `Zhoršeně přibližně ${d}`,
     tipWindow: (a, b) => (a === b ? `Problém v ${a} UTC` : `Problémy ${a}–${b} UTC`),
     tipToday: "dnes, zatím",
+    // 🚨 Today's column is red for what happened this MORNING while the row's badge says the
+    // service is fine NOW, and those two are both true (owner, 2026-09-21). Without a sentence
+    // saying so, the reader is left to work out why a red bar sits under a green badge — which
+    // is the same puzzle, one step on, that made the old code overwrite the record in the first
+    // place. So the tooltip says it out loud instead.
+    tipRecovered: (at) => (at ? `Od ${at} UTC zase funguje.` : "Teď už zase funguje."),
     where: "sonda běží mimo naši infrastrukturu",
     // ⚠️ The cadence came from the document, not from this sentence, since 2026-09-21. It was
     // written "každých 5 minut" — the exact thing `CADENCE_MIN` is published to prevent, and the
@@ -190,6 +242,8 @@ export const STR = {
     tipWarn: (d) => `Degraded for about ${d}`,
     tipWindow: (a, b) => (a === b ? `Trouble at ${a} UTC` : `Trouble ${a}–${b} UTC`),
     tipToday: "today, so far",
+    // See the Czech note — a red bar under a green badge, explained rather than left as a puzzle.
+    tipRecovered: (at) => (at ? `Working again since ${at} UTC.` : "Working again now."),
     where: "probed from outside our infrastructure",
     // See the Czech note above — a cadence the page asserted instead of reading.
     probe: (m = 5) => `Probed every ${m === 1 ? "minute" : `${m} minutes`} from off our main server.`,
@@ -232,7 +286,7 @@ export const STR = {
  * out from its own clock. Formatting is pinned to UTC for the same reason the store is: the bar
  * is a UTC day, and a reader in Auckland must not be shown yesterday's label on today's bar.
  *
- * @param {{ key:string, state:string, facts?:{down:number,warn:number,from?:string,to?:string,why?:string}|null, cadenceMin?:number, today?:boolean }} d
+ * @param {{ key:string, state:string, facts?:{down:number,warn:number,from?:string,to?:string,why?:string}|null, cadenceMin?:number, today?:boolean, now?:string }} d
  * @returns {{ head:string, state:string, lines:string[], why:string }}
  */
 export function dayTip(d, lang) {
@@ -254,6 +308,12 @@ export function dayTip(d, lang) {
     if (f.warn > 0) lines.push(t.tipWarn(t.dur(f.warn * cad)));
     if (f.from && f.to) lines.push(t.tipWindow(f.from, f.to));
     why = f.why || "";
+  }
+  // ⚠️ Only on TODAY's column, and only when the row is actually fine again. On an older day
+  // "it is working now" would be a statement about a different day, and on a row still failing
+  // it would be false. `now` is the component's current state, handed in by the page.
+  if (d.today && d.now === "ok" && (d.state === "down" || d.state === "warn")) {
+    lines.push(t.tipRecovered(d.facts && d.facts.to));
   }
   // The probe's own sentence about its own endpoint — "HTTP 502, expected 200" — is returned
   // apart from our lines, and deliberately untranslated: it is a measurement, and rewording it

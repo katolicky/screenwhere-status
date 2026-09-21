@@ -189,6 +189,12 @@
   .bars i.warn{ background:var(--warn); }
   .bars i.down{ background:var(--down); }
   .bars i.nodata{ background:var(--nodata); }
+  /* Today, when the day is painted for trouble that has since cleared: the DAY's colour with a
+     green foot saying it is up right now. Two true statements in one bar — the strip answers
+     "what happened today", the badge beside it answers "what is true now", and they are allowed
+     to differ. Deliberately not a hue of its own: see `barClass` in i18n.js. */
+  .bars i.down.recovered{ background:linear-gradient(to top, var(--ok-dim) 0 34%, var(--down) 34%); }
+  .bars i.warn.recovered{ background:linear-gradient(to top, var(--ok-dim) 0 34%, var(--warn) 34%); }
   .scale{ display:flex; justify-content:space-between; font-size:.75rem; color:var(--color-fg-subtle);
           margin-top:7px; }
 
@@ -303,7 +309,7 @@
 <script type="module">
 // The strings and every count-next-to-a-noun rule live in i18n.js so the suite can render them
 // at 1, 2 and 5 rather than read them. Czech agreement is the fault this project ships most.
-import { STR, pct, dayTip, daysOnRecord, incidentEntries } from './i18n.js';
+import { STR, pct, dayTip, daysOnRecord, incidentEntries, todayState, barClass } from './i18n.js';
 
 // ── language ──────────────────────────────────────────────────────────────────
 // Public page, so the first guess comes from the browser rather than from us; the choice is
@@ -422,10 +428,10 @@ function renderComponents(stale){
   TIPS.length = 0;
   $('#components').innerHTML = (data.components || []).map((c, ci) => {
     const days = (c.days || []).slice();
-    // Today's column carries the CURRENT state, and grey when we have stopped believing our own
-    // data. Drawing it green under an "Outage" badge was the first thing clicking the mockup
-    // caught: the strip and the badge disagreed, and the eye believes the strip.
-    if (days.length) days[days.length - 1] = stale ? 'nodata' : ({ ok:'ok', warn:'warn', down:'down' }[c.state] || 'nodata');
+    // Today's column is the WORSE of the day's record and the current state — never the instant
+    // alone, which is what threw away a three-hour outage the moment it recovered. The decision
+    // lives in i18n.js so the suite can run it; the page keeps no copy. See `todayState`.
+    if (days.length) days[days.length - 1] = todayState(days[days.length - 1], c.state, stale);
     const st = stale ? 'none' : (['ok','warn','down'].includes(c.state) ? c.state : 'none');
     // A `warn` on a row that counts devices is not a latency — see `partly` in i18n.js. The flag
     // comes from the document; the page keeps no list of which rows those are.
@@ -446,7 +452,7 @@ function renderComponents(stale){
         // as ninety anonymous rectangles, which is what it looked like with the native `title`
         // gone. `role="img"` is what makes a label on an empty element get announced at all.
         const label = [tip.head, tip.state, ...tip.lines, tip.why].filter(Boolean).join(' — ');
-        return `<i class="${esc(d)}" role="img" data-c="${ci}" data-d="${i}" aria-label="${esc(label)}"></i>`;
+        return `<i class="${esc(barClass(d, c.state, i === days.length - 1))}" role="img" data-c="${ci}" data-d="${i}" aria-label="${esc(label)}"></i>`;
       }).join('')}</div>
       <div class="scale"><span>${esc(t.scale90)}</span><span>${esc(t.scaleToday)}</span></div>
     </div>`;
@@ -469,7 +475,9 @@ function tipFor(ci, i, drawn, c, n){
   // stopped believing our own file. Neither is entitled to narrate an outage, so the facts are
   // withheld there and the tooltip says the one true thing it knows.
   const facts = drawn === 'nodata' ? null : ((c.dayFacts || {})[key] || null);
-  const tip = dayTip({ key, state: drawn, facts, cadenceMin: data.cadenceMin, today: i === n - 1 }, lang);
+  // `now` lets today's tooltip say the trouble is over — a red column under a green badge is
+  // two true statements about two different questions, and the tooltip is where that is said.
+  const tip = dayTip({ key, state: drawn, facts, cadenceMin: data.cadenceMin, today: i === n - 1, now: c.state }, lang);
   (TIPS[ci] = TIPS[ci] || [])[i] = tip;
   return tip;
 }
