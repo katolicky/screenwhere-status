@@ -184,6 +184,23 @@ const pubSrv = async (kinds, { status = 200, body = null } = {}) => {
     r.plugs.state === "none" && !/all ok/.test(r.plugs.detail) && /nothing measured/.test(r.plugs.detail), r.plugs.detail);
 }
 {
+  // 🚨 w-cf2067: one site agent went quiet beside a talking one. Its plugs left the verdict and
+  // the row said "all ok" about devices nobody had heard from. The relay now counts them.
+  let r = await pubSrv({ plug: { state: "ok", failing: 0, unmeasured: 1 }, box: { state: "warn", failing: 1 } });
+  ok("public rows: a quiet plug beside good ones is named, not dropped",
+    r.plugs.state === "ok" && r.plugs.detail === "all ok, 1 not measured", r.plugs.detail);
+  r = await pubSrv({ plug: { state: "warn", failing: 2, unmeasured: 1 }, box: { state: "ok", failing: 0 } });
+  ok("public rows: …and beside failing ones too", r.plugs.detail === "2 failing, 1 not measured", r.plugs.detail);
+  // Under `down` failing + unmeasured IS the total — the owner's rule is that it never crosses.
+  // The relay does not send it there; if one ever did, it must stop here, not reach status.json.
+  r = await pubSrv({ plug: { state: "down", failing: 3, unmeasured: 1 }, box: { state: "ok", failing: 0 } });
+  ok("public rows: a count under `down` is dropped — failing + it would publish the total",
+    r.plugs.detail === "3 failing", r.plugs.detail);
+  // Two repositories, two releases: a relay from before w-cf2067 sends no such field.
+  r = await pubSrv({ plug: { state: "ok", failing: 0 }, box: { state: "ok", failing: 0 } });
+  ok("public rows: a relay without the field reads exactly as before", r.plugs.detail === "all ok", r.plugs.detail);
+}
+{
   const r = await pubSrv({ plug: { state: "warn", failing: 3 }, box: { state: "down", failing: 2 } });
   ok("public rows: the state comes from the relay, not from arithmetic here",
     r.plugs.state === "warn" && r.site.state === "down");

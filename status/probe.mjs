@@ -232,8 +232,15 @@ async function probePublic(id, kind) {
     // way this file's other probes write measurements ("HTTP 200", "STUN binding success in
     // 273 ms") — and crucially WITHOUT a denominator: never "3/7", which is the exact disclosure
     // the 2026-08-13 decision to leave this row dark was protecting.
+    // 🚨 w-cf2067: the verdict is reached over MEASURED devices, so the plugs of a site agent that
+    // went quiet beside a talking one fall out of it and the row read "all ok". The relay now
+    // counts them — but only under `ok`/`warn`, where the good count it never sends keeps the
+    // total unknowable. Under `down` failing + unmeasured would BE the total, so a count that
+    // arrives there anyway (a relay that got this wrong) is dropped here rather than published.
+    const unmeasured = k.state === "ok" || k.state === "warn" ? Math.max(0, Math.floor(Number(k.unmeasured) || 0)) : 0;
+    const said = failing > 0 ? `${failing} failing` : "all ok";
     return { id, state: /** @type {State} */ (k.state), ms,
-      detail: failing > 0 ? `${failing} failing` : "all ok", failing };
+      detail: unmeasured > 0 ? `${said}, ${unmeasured} not measured` : said, failing };
   } catch (e) {
     return { id, state: "none", ms: Date.now() - t0, detail: `could not ask: ${String((e && /** @type {Error} */ (e).message) || e)}` };
   }
