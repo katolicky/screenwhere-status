@@ -222,6 +222,11 @@ async function probePublic(id, kind) {
     const k = (await res.json())?.kinds?.[kind];
     if (!k || typeof k.state !== "string") return { id, state: "none", ms, detail: "could not ask: no summary" };
     const failing = Number(k.failing) || 0;
+    // 🚨 `none` has no failing count because nothing was MEASURED, and a zero there is not good
+    // news. This fell through to "all ok" — the in-app status card then printed "all ok" beside
+    // its own "unknown" while the only site agent was silent (w-a17128, 2026-09-23). When the
+    // silence began is added by `buildStatus`, which has the tail of readings; this has one.
+    if (k.state === "none") return { id, state: "none", ms, detail: "nothing measured in the last hour" };
     // ⚠️ `detail` is published verbatim into the public `status.json` and shown in a day's
     // tooltip, so a bare number would be a meaningless "3" in a public file. It is written the
     // way this file's other probes write measurements ("HTTP 200", "STUN binding success in

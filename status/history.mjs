@@ -265,6 +265,31 @@ export function deriveIncidents(components, keys) {
 }
 
 /**
+ * A row's published detail — and, for a row nobody could measure, WHEN it last had a verdict.
+ *
+ * 🚨 The detail of a `none` row describes the silence, never the last thing heard before it
+ * (w-a17128): the in-app card showed "unknown" with "all ok" beside it, the last value dressed
+ * as a live one. The reader's next question is "since when", and only this side can answer it:
+ * the probe sees one reading, the store keeps the 24-hour tail. The time is the last reading
+ * that HAD a verdict — a fact — rather than the first silent one, because the relay's plug
+ * verdict is an hourly bucket and the silence really began up to an hour before we noticed.
+ * UTC, and dated when the day differs, like every other time in this file.
+ * @returns {string}
+ */
+export function silentDetail(hist, id) {
+  const latest = hist.latest;
+  const detail = String(latest?.detail?.[id] || "");
+  if (!latest || (latest.states?.[id] || "none") !== "none") return detail;
+  const heard = [...(hist.recent || [])].reverse().find((r) => {
+    const st = r?.states?.[id];
+    return st === "ok" || st === "warn" || st === "down";
+  });
+  const when = !heard ? "no verdict in the last 24 h"
+    : "last verdict " + (dayKey(heard.ts) === dayKey(latest.ts) ? "" : dayKey(heard.ts) + " ") + hhmm(heard.ts) + " UTC";
+  return detail ? `${detail} · ${when}` : when;
+}
+
+/**
  * The published document. Everything the page needs and nothing it does not — note that the
  * page is NOT told whether it is stale: it is given `generatedAt` and works that out itself,
  * because staleness is a fact about the moment somebody opens the page, not about the moment
@@ -296,7 +321,7 @@ export function buildStatus(hist, incidents, now = Date.now()) {
       // claim. Published rather than re-derived, so the page keeps no copy of the list.
       ...(warnIsOutage(c.id) ? { aggregate: true } : {}),
       state: /** @type {State} */ (latest?.states?.[c.id] || "none"),
-      detail: latest?.detail?.[c.id] || "",
+      detail: silentDetail(hist, c.id),
       uptime90: pct,
       days,
       dayFacts,

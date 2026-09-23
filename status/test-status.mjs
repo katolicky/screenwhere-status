@@ -177,6 +177,13 @@ const pubSrv = async (kinds, { status = 200, body = null } = {}) => {
   ok("public rows: all well says so in words, not as a ratio", r.plugs.detail === "all ok");
 }
 {
+  // 🚨 w-a17128: the relay says `none` with `failing: 0` when NOTHING was measured — the site
+  // agent went silent. That zero is not good news, and it read as "all ok" beside "unknown".
+  const r = await pubSrv({ plug: { state: "none", failing: 0 }, box: { state: "ok", failing: 0 } });
+  ok("public rows: nobody measured is `none`, and its detail never says `all ok`",
+    r.plugs.state === "none" && !/all ok/.test(r.plugs.detail) && /nothing measured/.test(r.plugs.detail), r.plugs.detail);
+}
+{
   const r = await pubSrv({ plug: { state: "warn", failing: 3 }, box: { state: "down", failing: 2 } });
   ok("public rows: the state comes from the relay, not from arithmetic here",
     r.plugs.state === "warn" && r.site.state === "down");
@@ -282,6 +289,35 @@ const T0 = Date.parse("2026-08-10T12:00:00Z");
   let h = emptyHistory();
   h = appendReading(h, reading(T0, { app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs: "none" }));
   ok("published: a premises row nobody measured does not blank the banner", buildStatus(h, [], T0).overall === "ok");
+}
+{
+  // 🚨 w-a17128, the reported day's shape: the plugs were measured and fine, then the agent went
+  // silent. The published detail must say WHEN the row last had a verdict — not repeat that
+  // verdict, which the in-app card printed as "all ok" beside its own "unknown".
+  const M = 60000, all = (plugs) => ({ app: "ok", docs: "ok", mcp: "ok", whep: "ok", turn: "ok", site: "ok", plugs });
+  let h = emptyHistory();
+  h = appendReading(h, reading(T0 - 10 * M, all("ok"), { plugs: "all ok" }));
+  h = appendReading(h, reading(T0 - 5 * M, all("ok"), { plugs: "all ok" }));
+  h = appendReading(h, reading(T0, all("none"), { plugs: "nothing measured in the last hour" }));
+  h = appendReading(h, reading(T0 + 5 * M, all("none"), { plugs: "nothing measured in the last hour" }));
+  const p = buildStatus(h, [], T0 + 5 * M).components.find((c) => c.id === "plugs");
+  ok("published: a silent row says when it last had a verdict, in UTC",
+    p.state === "none" && p.detail === "nothing measured in the last hour · last verdict 11:55 UTC", p.detail);
+  ok("published: …and never the last verdict itself", !/all ok/.test(p.detail), p.detail);
+  // A measured row is untouched — the suffix belongs to silence only.
+  const a = buildStatus(h, [], T0 + 5 * M).components.find((c) => c.id === "app");
+  ok("published: a measured row keeps its own detail verbatim", a.detail === "");
+  // Silence that began on another day carries the date, or "11:55" would name the wrong one.
+  let y = emptyHistory();
+  y = appendReading(y, reading(T0 - 13 * 60 * M, all("ok")));
+  y = appendReading(y, reading(T0, all("none"), { plugs: "nothing measured in the last hour" }));
+  const yp = buildStatus(y, [], T0).components.find((c) => c.id === "plugs");
+  ok("published: a verdict from another day is dated", /last verdict 2026-08-09 23:00 UTC$/.test(yp.detail), yp.detail);
+  // And silence longer than the tail says so rather than inventing a time.
+  let n = emptyHistory();
+  n = appendReading(n, reading(T0, all("none")));
+  const np = buildStatus(n, [], T0).components.find((c) => c.id === "plugs");
+  ok("published: silence longer than the tail says so", np.detail === "no verdict in the last 24 h", np.detail);
 }
 {
   // The owner's own report, reproduced from the live document of 2026-09-21: five green planes,
