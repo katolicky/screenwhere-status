@@ -680,26 +680,55 @@ ok("theme: the sun/moon swap covers the unset case, not just the two explicit on
 {
   const wf = readFileSync(join(HERE, "..", ".github", "workflows", "status.yml"), "utf8");
   const ifLines = wf.split("\n").filter((l) => /^\s*if:/.test(l));
-  ok("workflow: it has conditional steps at all — otherwise this section guards nothing",
-    ifLines.length >= 2);
   ok("workflow: no `if:` reads the `secrets` context — that is an invalid file, not a false test",
     ifLines.every((l) => !/secrets\./.test(l)), ifLines.filter((l) => /secrets\./.test(l)).join(" | "));
-  ok("workflow: the Cloudflare token is lifted to `env`, which `if:` may read",
-    /^\s{4}env:/m.test(wf) && /CLOUDFLARE_API_TOKEN:\s*\$\{\{\s*secrets\.CLOUDFLARE_API_TOKEN\s*\}\}/.test(wf));
-  // 🚨 The pairing, which is the assertion that matters most in this block. Hosting is three
-  // actions in two web UIs, so "one secret set, the other forgotten" is the LIKELIEST state
-  // anybody is ever in — not an edge case. Testing the token alone meant a half-configured repo
-  // ran wrangler and died inside it, while the notice that would have named the missing piece
-  // stayed quiet for the same reason. And if the two conditions ever both go false, publication
-  // silently does not happen and nothing says so: this page's own subject, in its own pipeline.
-  const pub  = (wf.match(/- name: Publish page\n\s*if: ([^\n]+)/) || [, ""])[1];
-  const skip = (wf.match(/- name: Say what was skipped\n\s*if: ([^\n]+)/) || [, ""])[1];
-  ok("workflow: publishing requires BOTH Cloudflare secrets, not just the token",
-    /CLOUDFLARE_API_TOKEN != ''/.test(pub) && /CLOUDFLARE_ACCOUNT_ID != ''/.test(pub) && /&&/.test(pub), pub);
-  ok("workflow: …and the skip notice is its exact complement, so no state is silent on both",
-    /CLOUDFLARE_API_TOKEN == ''/.test(skip) && /CLOUDFLARE_ACCOUNT_ID == ''/.test(skip) && /\|\|/.test(skip), skip);
-  ok("workflow: the notice names WHICH secret is missing rather than a fixed one",
-    /missing secret\(s\)/.test(wf) && /\[ -z "\$CLOUDFLARE_ACCOUNT_ID" \]/.test(wf));
+  // 🚨 F34b (w-4073a5): the Pages token used to be lifted to the job-level `env` so that an `if:`
+  // could read it — which handed it to every step of the job, beside `contents: write`. The gate
+  // moved into status/publish-page.mjs, so the property asserted now is WHERE the secret lives:
+  // inside the Publish page step and nowhere else. Read per step, not by a regex over the file,
+  // because "the line exists" is true of the old shape too.
+  const live = wf.split("\n").filter((l) => !/^\s*#/.test(l));
+  const liveText = live.join("\n");
+  const jobEnv = live.findIndex((l) => /^ {4}env:/.test(l));
+  ok("workflow: the job has NO job-level `env` — whatever sits there, every step gets",
+    jobEnv === -1, live[jobEnv] || "");
+  const steps = liveText.split(/\n(?= {6}- )/).slice(1);
+  const pubStep = steps.find((st) => /- name: Publish page\n/.test(st)) || "";
+  for (const k of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]) {
+    const holders = steps.filter((st) => st.includes(`secrets.${k}`));
+    const uses = (liveText.match(new RegExp(`secrets\\.${k}\\b`, "g")) || []).length;
+    ok(`workflow: ${k} is in exactly one step, and it is Publish page`,
+      holders.length === 1 && holders[0] === pubStep && uses === 1,
+      `${uses} use(s): ` + holders.map((st) => st.split("\n")[0].trim()).join(" | "));
+  }
+  ok("workflow: Publish page is the gate program, with no `if:` of its own",
+    /run: node status\/publish-page\.mjs\s*$/.test(pubStep) && !/\bif:/.test(pubStep), pubStep);
+  // The supply-chain half: `npx --yes wrangler@3` resolved the tree fresh ~288×/day and ran it
+  // with the token. The publisher is installed from its lockfile, with no install hooks, in a
+  // step that holds no secret.
+  ok("workflow: no `npx` — a package resolved at run time is a package nobody pinned",
+    !/\bnpx\b/.test(liveText), live.filter((l) => /\bnpx\b/.test(l)).join(" | "));
+  ok("workflow: …and no step runs wrangler directly — only the gate program does",
+    !/wrangler/.test(liveText), live.filter((l) => /wrangler/.test(l)).join(" | "));
+  const inst = steps.find((st) => /- name: Install publisher\n/.test(st)) || "";
+  ok("workflow: the publisher is installed from its lockfile, without install scripts",
+    /run: npm ci --prefix publish --ignore-scripts/.test(inst), inst);
+  ok("workflow: …in a step that holds no secret, BEFORE the step that does",
+    inst !== "" && !/secrets\./.test(inst) && steps.indexOf(inst) < steps.indexOf(pubStep));
+  ok("workflow: checkout does not leave the write token in .git/config for later steps",
+    /uses: actions\/checkout@v4\n\s*with:\n\s*persist-credentials: false/.test(liveText));
+  const pubPkg = JSON.parse(readFileSync(join(HERE, "..", "publish", "package.json"), "utf8"));
+  const pubLock = JSON.parse(readFileSync(join(HERE, "..", "publish", "package-lock.json"), "utf8"));
+  const want = pubPkg.devDependencies?.wrangler || "";
+  const locked = pubLock.packages?.["node_modules/wrangler"] || {};
+  ok("publish: wrangler is pinned to an EXACT version, not a range", /^\d+\.\d+\.\d+$/.test(want), want);
+  ok("publish: …the lockfile holds that version, with an integrity hash",
+    locked.version === want && /^sha512-/.test(locked.integrity || ""), JSON.stringify(locked).slice(0, 120));
+  ok("publish: …and its root agrees with the manifest — otherwise `npm ci` refuses on the runner",
+    pubLock.packages?.[""]?.devDependencies?.wrangler === want);
+  ok("publish: every locked package carries an integrity hash — none is fetched unverified",
+    Object.entries(pubLock.packages || {}).every(([k, v]) => k === "" || v.link || /^sha512-/.test(v.integrity || "")),
+    Object.entries(pubLock.packages || {}).filter(([k, v]) => k !== "" && !v.link && !/^sha512-/.test(v.integrity || "")).map(([k]) => k).join(" "));
   // 🚨 The SECOND fault, which the first fix merely uncovered: `GITHUB_TOKEN` is read-only by
   // default, so force-pushing `status-data` answered 403 / exit 128. Asserted because the push is
   // how the 90-day bar survives at all — without it every run starts from an empty history and
@@ -1281,5 +1310,47 @@ ok("harness: tsconfig includes status/, or its @ts-check headers check nothing",
     !/\.bars i\.down\.recovered\{[^}]*var\(--warn\)/.test(html));
 }
 
+// ── the publish gate, run rather than read (F34b, w-4073a5) ───────────────────
+// The pairing used to be two `if:` lines that had to stay exact complements by hand — if both ever
+// went false, nothing published and nothing said so. It is a program now, so it is RUN here, in
+// every state a half-done hosting setup can be in, against a stub wrangler that records what it
+// was given. The stub exits 3 so that "wrangler's exit code is the step's" is measured, not assumed.
+{
+  const { spawnSync } = await import("node:child_process");
+  const { mkdtempSync, writeFileSync, chmodSync, readFileSync: rd, existsSync, rmSync } = await import("node:fs");
+  const { tmpdir } = await import("node:os");
+  const dir = mkdtempSync(join(tmpdir(), "sw-pub-"));
+  const stub = join(dir, "wrangler");
+  const seen = join(dir, "seen.json");
+  writeFileSync(stub, `#!/usr/bin/env node\nrequire("fs").writeFileSync(${JSON.stringify(seen)}, JSON.stringify({ argv: process.argv.slice(2), token: process.env.CLOUDFLARE_API_TOKEN || "", account: process.env.CLOUDFLARE_ACCOUNT_ID || "", cwd: process.cwd() }));\nprocess.exit(3);\n`);
+  chmodSync(stub, 0o755);
+  const gate = (extra) => {
+    rmSync(seen, { force: true });
+    const env = { PATH: process.env.PATH, SW_STATUS_WRANGLER: stub, ...extra };
+    const r = spawnSync(process.execPath, [join(HERE, "publish-page.mjs")], { env, encoding: "utf8" });
+    return { code: r.status, out: (r.stdout || "") + (r.stderr || ""), ran: existsSync(seen) ? JSON.parse(rd(seen, "utf8")) : null };
+  };
+  const none = gate({});
+  ok("publish gate: no secrets → a notice naming BOTH, exit 0, wrangler never started",
+    none.code === 0 && none.ran === null && /::notice::.*CLOUDFLARE_API_TOKEN CLOUDFLARE_ACCOUNT_ID/.test(none.out), `${none.code} ${none.out}`);
+  const tokOnly = gate({ CLOUDFLARE_API_TOKEN: "t0k" });
+  ok("publish gate: token alone → names the ACCOUNT as missing and does not run wrangler",
+    tokOnly.code === 0 && tokOnly.ran === null && /missing secret\(s\): CLOUDFLARE_ACCOUNT_ID\./.test(tokOnly.out), `${tokOnly.code} ${tokOnly.out}`);
+  const accOnly = gate({ CLOUDFLARE_ACCOUNT_ID: "acc" });
+  ok("publish gate: account alone → names the TOKEN as missing and does not run wrangler",
+    accOnly.code === 0 && accOnly.ran === null && /missing secret\(s\): CLOUDFLARE_API_TOKEN\./.test(accOnly.out), `${accOnly.code} ${accOnly.out}`);
+  const both = gate({ CLOUDFLARE_API_TOKEN: "t0k", CLOUDFLARE_ACCOUNT_ID: "acc" });
+  ok("publish gate: both set → wrangler runs, with both secrets in ITS environment",
+    both.ran !== null && both.ran.token === "t0k" && both.ran.account === "acc", JSON.stringify(both.ran));
+  ok("publish gate: …deploying status/public to the screenwhere-status project, from the repo root",
+    both.ran !== null && both.ran.argv.join(" ") === "pages deploy status/public --project-name=screenwhere-status --branch=main --commit-dirty=true"
+      && rd(join(both.ran.cwd, "status", "publish-page.mjs"), "utf8").length > 0, JSON.stringify(both.ran));
+  ok("publish gate: …and wrangler's exit code is the step's — a failed deploy is a red run",
+    both.code === 3, String(both.code));
+  const noBin = gate({ CLOUDFLARE_API_TOKEN: "t0k", CLOUDFLARE_ACCOUNT_ID: "acc", SW_STATUS_WRANGLER: join(dir, "absent") });
+  ok("publish gate: configured but the install step did not run → exit 1, never a quiet skip",
+    noBin.code === 1 && /::error::.*Install publisher/.test(noBin.out), `${noBin.code} ${noBin.out}`);
+  rmSync(dir, { recursive: true, force: true });
+}
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

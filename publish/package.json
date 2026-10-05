@@ -1,0 +1,8 @@
+{
+  "name": "screenwhere-status-publish",
+  "private": true,
+  "description": "The page publisher, pinned. Installed only by the Publish page step of status.yml, with --ignore-scripts and without any secret in its environment.",
+  "devDependencies": {
+    "wrangler": "3.114.17"
+  }
+}

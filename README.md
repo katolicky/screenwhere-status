@@ -16,6 +16,9 @@ history and the probe design were always public; credentials stay in GitHub secr
   is the full design document and setup guide.
 - **`.github/workflows/status.yml`** — one run = probe → record history (orphan branch
   `status-data`) → publish page to Cloudflare Pages (project `screenwhere-status`).
+- **`publish/`** — the page publisher (wrangler), pinned by its own lockfile. Only the workflow's
+  *Install publisher* step installs it, with `--ignore-scripts`; only *Publish page* —
+  `status/publish-page.mjs` — runs it, and that is the one step the Cloudflare secrets reach.
 - **`.github/workflows/ci.yml`** — tests + typecheck, on push and PR.
 - **`worker/`** — a Cloudflare Worker cron that fires `workflow_dispatch` every five minutes,
   because GitHub's own `schedule` is best-effort (measured: `*/5` ran ~1×/30–65 min). The
@@ -25,7 +28,7 @@ history and the probe design were always public; credentials stay in GitHub secr
 
 | Secret | Required? | Purpose |
 |---|---|---|
-| `CLOUDFLARE_API_TOKEN` | for publishing | Pages deploy; without BOTH Cloudflare secrets the run records history and prints a notice instead |
+| `CLOUDFLARE_API_TOKEN` | for publishing | Pages deploy; without BOTH Cloudflare secrets the run records history and prints a notice instead. Visible to the *Publish page* step only |
 | `CLOUDFLARE_ACCOUNT_ID` | for publishing | ditto |
 | `SW_STATUS_DISCORD_WEBHOOK` | optional | outage alert channel |
 | `SW_STATUS_DISCORD_MENTION` | optional | `@here`, `<@&roleid>` or a bare user id to ride above the alert card |

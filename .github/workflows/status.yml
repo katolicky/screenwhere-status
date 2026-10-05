@@ -39,22 +39,26 @@ jobs:
     # token still cannot touch actions, packages, or anything else.
     permissions:
       contents: write
-    # 🚨 The Cloudflare secrets are lifted to job-level `env` for ONE reason: a step's `if:` may
-    # not read the `secrets` context. GitHub allows `secrets` in `env`, `with` and at job level
-    # and nowhere else, and an `if: ${{ secrets.X != '' }}` is not a false condition — it is an
-    # invalid workflow FILE. The whole run fails at validation in 0 s, before a single step, and
-    # the Actions list shows a red mark with no log to open. It shipped that way and every run
-    # from the first commit of this page onwards failed, silently, because the design said the
-    # publish step would be "skipped" and nobody opened the tab to check which. `env` IS allowed
-    # in `if:`, so the same intent survives the move.
-    env:
-      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
-      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+    # ⚠️ NO job-level `env`, and keep it that way. The Cloudflare secrets used to be lifted here,
+    # which handed the Pages token to every step of the job — the history fetch, the probe, the
+    # history push — beside `contents: write` (F34b, w-4073a5). They were lifted only because a
+    # step's `if:` may not read `secrets` (writing one is an invalid workflow FILE that fails in
+    # 0 s with no log — w-f862c0). The gate is now status/publish-page.mjs, so the secrets sit in
+    # that one step's `env` and no `if:` needs them.
     steps:
+      # `persist-credentials: false`: checkout would otherwise leave the write-scoped GITHUB_TOKEN
+      # in .git/config for every later step to read — including the third-party publisher. The
+      # history fetch is anonymous (the repository is public) and the history push is handed its
+      # own token URL in SW_STATUS_PUSH_URL, so nothing needs the stored copy (w-4073a5).
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-node@v4
         with:
           node-version: "20"
+          # The npm download cache for the pinned publisher below, keyed on its lockfile.
+          cache: npm
+          cache-dependency-path: publish/package-lock.json
 
       # The durable history lives on the orphan branch `status-data`, never on main. At a
       # five-minute cadence a commit per run is 288 commits a day — the branch therefore holds
@@ -113,29 +117,24 @@ jobs:
 
       # The page itself. Cloudflare Pages, because GitHub Pages will not serve a private repo
       # without a paid plan — and because Cloudflare already holds the DNS for the hostname.
-      # Absent the secrets this step is skipped and the run still records history, so the prober
-      # can be proven before the hosting exists.
       #
-      # ⚠️ BOTH secrets are required, and the pair is the point. Setting up hosting is three
-      # separate actions in two different web UIs, so "one of them done" is not an edge case — it
-      # is the most likely state anybody is ever in. Testing only the token meant a half-configured
-      # repo RAN this step and died inside wrangler, while the "here is what is missing" notice
-      # below stayed quiet because its condition was also written against the token alone.
-      #
-      # 🚨 The two conditions must stay exact complements. If they ever both go false, publication
-      # does not happen AND nothing says so — the failure this whole page was built to refuse,
-      # reproduced in its own delivery pipeline. `status/test-status.mjs` asserts the pairing.
-      - name: Publish page
-        if: env.CLOUDFLARE_API_TOKEN != '' && env.CLOUDFLARE_ACCOUNT_ID != ''
-        run: npx --yes wrangler@3 pages deploy status/public --project-name=screenwhere-status --branch=main --commit-dirty=true
+      # 🚨 wrangler is PINNED, and installed in a step of its own that holds no secret (F34b,
+      # w-4073a5). This used to be `npx --yes wrangler@3`: the whole dependency tree resolved
+      # fresh from the registry ~288 times a day, each resolution then run with the Pages token
+      # in its environment. Now the tree is publish/package-lock.json, integrity hashes included,
+      # and `--ignore-scripts` means no package's install hook runs at all. Bump it deliberately:
+      # edit publish/package.json, `npm install --ignore-scripts` there, commit both files.
+      - name: Install publisher
+        run: npm ci --prefix publish --ignore-scripts --no-audit --no-fund
 
-      - name: Say what was skipped
-        if: env.CLOUDFLARE_API_TOKEN == '' || env.CLOUDFLARE_ACCOUNT_ID == ''
-        # `if` rather than `[ … ] && …`: the step runs under `bash -e`, and whether an AND-OR list
-        # whose left side is false trips it is a rule nobody should have to recall while reading a
-        # notice-printing step. Verified against `bash -e` locally for all three cases.
-        run: |
-          missing=""
-          if [ -z "$CLOUDFLARE_API_TOKEN" ];  then missing="$missing CLOUDFLARE_API_TOKEN";  fi
-          if [ -z "$CLOUDFLARE_ACCOUNT_ID" ]; then missing="$missing CLOUDFLARE_ACCOUNT_ID"; fi
-          echo "::notice::History updated; page NOT published — missing secret(s):$missing. Setup: status/README.md § Hosting."
+      # The ONLY step that sees the Cloudflare secrets. Absent either one, the program prints a
+      # notice naming which and exits 0 — the history above is already recorded, so the prober
+      # works before the hosting exists. Both set, it runs the pinned wrangler and fails with it.
+      # The pairing (both required, and a notice for every state that does not publish) is in
+      # the program, where status/test-status.mjs runs it, instead of two `if:` lines that had to
+      # stay exact complements by hand.
+      - name: Publish page
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: node status/publish-page.mjs

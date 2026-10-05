@@ -206,7 +206,8 @@ apart from each other.
 the token that session produces, and a credential must not pass through an assistant or through
 chat. So this is a checklist rather than a script. The prober and the history work with none of it
 — each run records history, skips publishing, and the run's notice names **which** secret is
-missing (both are required; see the pairing comment in the workflow).
+missing (both are required; `status/publish-page.mjs` decides, and `status/test-status.mjs`
+runs it in every half-configured state).
 
 The domain is on Cloudflare Registrar under the `kac.dev` account (`docs/INFRA.md` § Domains).
 
