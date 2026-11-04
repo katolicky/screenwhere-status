@@ -30,7 +30,14 @@
      those are what keeps it ahead of the first paint. Read the stored choice late and the page
      renders once in the OS theme and then flips, which reads as a glitch on every single load. -->
 <script>
-  try { var t = localStorage.getItem('sw-status-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}
+  // `sw-theme` is the cookie app.screenwhere.com writes too (`w-5021ea`), so a choice made on
+  // either page holds on both. It wins over this page's own copy; its `system` is the empty
+  // attribute above — follow the machine — which is why that value sets nothing.
+  try {
+    var c = (document.cookie.match(/(?:^|; )sw-theme=(light|dark|system)(?:;|$)/) || [])[1];
+    var t = c || localStorage.getItem('sw-status-theme');
+    if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  } catch (e) {}
 </script>
 <style>
   /* ===== tokens — the base set and LIGHT semantics; taken from docs/site/docs.css so the two
@@ -615,6 +622,9 @@ $('#themeBtn').addEventListener('click', () => {
   const next = isDark() ? 'light' : 'dark';
   root.dataset.theme = next;
   try { localStorage.setItem('sw-status-theme', next); } catch {}
+  // …and for the app, which cannot read this origin's storage (`w-5021ea`).
+  const dom = /(^|\.)screenwhere\.com$/.test(location.hostname) ? '; domain=screenwhere.com' : '';
+  document.cookie = 'sw-theme=' + next + '; path=/; max-age=31536000; samesite=lax' + (location.protocol === 'https:' ? '; secure' : '') + dom;
   syncTheme();
 });
 // An unset theme follows the machine, and has to keep following it while the tab is open: this
